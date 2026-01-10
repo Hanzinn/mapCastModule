@@ -8,9 +8,7 @@ buildscript {
     }
 }
 
-plugins {
-    id 'com.android.application'
-}
+apply plugin: 'com.android.application'
 
 android {
     compileSdk 33
