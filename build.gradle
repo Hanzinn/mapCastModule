@@ -33,6 +33,15 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+
+    // ===== 强制输出详细错误（只加这两行）=====
+    tasks.whenTaskAdded { task ->
+        if (task.name.contains('Release')) {
+            task.doFirst { println ">>> Running $task.name" }
+            task.doLast  { println ">>> Finished $task.name" }
+        }
+    }
+    // ==========================================
 }
 
 repositories {
