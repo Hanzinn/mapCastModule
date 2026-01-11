@@ -30,8 +30,14 @@ jobs:
           chmod +x ./gradlew
           ./gradlew clean assembleRelease --no-daemon --no-build-cache --refresh-dependencies
       
+      # 新增：打印所有build/outputs目录下的文件，找到APK实际路径
+      - name: Debug - Find APK path
+        run: |
+          echo "=== 搜索所有APK文件 ==="
+          find . -name "*.apk" -type f
+      
       - uses: actions/upload-artifact@v4
         with:
           name: amapprojection-apk
-          path: mapCastModule/build/outputs/apk/release/*.apk  # 这里把app改成了你的模块名mapCastModule
+          path: 刚才找到的APK路径  # 替换成find命令输出的路径
 
