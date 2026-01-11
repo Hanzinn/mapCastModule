@@ -10,18 +10,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
+      # ===== 诊断步骤：打印 build.gradle 前10行 =====
+      - name: Debug - Show actual build.gradle content
+        run: |
+          echo "=== build.gradle 实际内容 ==="
+          head -10 build.gradle
+          echo "=== 第1-5行字符数 ==="
+          sed -n '1,5p' build.gradle | cat -A  # 显示隐藏字符和换行符
+      
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: 17
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
-      - run: chmod +x ./gradlew
-      - run: ./gradlew assembleRelease
+      
+      - name: Clean & Build APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean assembleRelease --no-build-cache --refresh-dependencies
+          
       - uses: actions/upload-artifact@v4
         with:
           name: amapprojection-apk
