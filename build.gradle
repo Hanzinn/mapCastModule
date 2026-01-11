@@ -55,8 +55,5 @@ dependencies {
     compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
 }
 
-// 定义 clean 任务
-task clean(type: Delete) {
-    delete rootProject.buildDir
-}
+
 
