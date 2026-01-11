@@ -11,34 +11,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      # 关键诊断：打印文件内容和路径
+      - name: Debug - Show files
+        run: |
+          echo "=== 当前目录文件列表 ==="
+          ls -la
+          echo "=== settings.gradle 内容 ==="
+          cat settings.gradle
+          echo "=== build.gradle 前10行 ==="
+          head -10 build.gradle
+      
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: 17
       
-      # 关键步骤：创建 settings.gradle 强制指定仓库
-      - name: Create settings.gradle
-        run: |
-          cat > settings.gradle << 'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-          EOF
-      
       - name: Build APK
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleRelease --no-daemon --no-build-cache
+          ./gradlew clean assembleRelease --no-daemon --no-build-cache --refresh-dependencies
       
       - uses: actions/upload-artifact@v4
         with:
