@@ -11,7 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # 关键诊断：打印文件内容和路径
       - name: Debug - Show files
         run: |
           echo "=== 当前目录文件列表 ==="
@@ -34,5 +33,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: amapprojection-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: mapCastModule/build/outputs/apk/release/*.apk  # 这里把app改成了你的模块名mapCastModule
 
