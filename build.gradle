@@ -1,15 +1,9 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
-
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.0.0'
-    }
+// 应用 Android 应用插件
+plugins {
+    id 'com.android.application' version '8.0.0' apply false
 }
 
+// 项目级仓库配置
 allprojects {
     repositories {
         google()
@@ -17,35 +11,48 @@ allprojects {
     }
 }
 
-subprojects {
-    project(':app') {
-        apply plugin: 'com.android.application'
-        android {
-            compileSdkVersion 333
+// 应用插件并进行模块配置
+apply plugin: 'com.android.application'
 
-            defaultConfig {
-                applicationId "ecarx.module.amapprojection"
-                versionCode 1
-                versionName "1.0"
-                minSdkVersion 28
-                targetSdkVersion 33
-           }
-           buildTypes {
-               release {
-                   minifyEnabled false
-               }
-           }
-           compileOptions {
-               sourceCompatibility JavaVersion.VERSION_1_8
-               targetCompatibility JavaVersion.VERSION_1_8
-           }
-       }
-       dependencies {
-           implementation fileTree(dir: 'libs', include: ['*.jar'])
-           testImplementation 'junit:junit:4.13.2'
-           androidTestImplementation 'androidx.test.ext:junit:1.1.3'
-           androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
-       }
+android {
+    // AGP 8.0 及以上版本必须指定
+    namespace 'ecarx.module.amapprojection'
+    compileSdkVersion 33
+
+    defaultConfig {
+        applicationId "ecarx.module.amapprojection"
+        versionCode 1
+        versionName "1.0"
+        minSdkVersion 28
+        targetSdkVersion 33
     }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.3'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
+    
+    // LSPosed 模块核心依赖
+    compileOnly 'de.robv.android.xposed:api:82'
+    compileOnly 'de.robv.android.xposed:api:82:sources'
+    compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
+}
+
+// 定义 clean 任务，避免 Task 'clean' not found 错误
+task clean(type: Delete) {
+    delete rootProject.buildDir
 }
 
