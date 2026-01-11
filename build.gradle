@@ -21,11 +21,11 @@ allprojects {
 apply plugin: 'com.android.application'
 
 android {
-    namespace 'ecarx.module.amapprojection'
+    namespace 'ecarx.module'
     compileSdkVersion 33
 
     defaultConfig {
-        applicationId "ecarx.module.amapprojection"
+        applicationId "ecarx.module"
         versionCode 1
         versionName "1.0"
         minSdkVersion 28
