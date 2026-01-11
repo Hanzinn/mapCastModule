@@ -25,7 +25,7 @@ android {
     compileSdkVersion 33
 
     defaultConfig {
-        applicationId "ecarx.module"
+        applicationId "ecarx.module.amapprojection"
         versionCode 1
         versionName "1.0"
         minSdkVersion 28
