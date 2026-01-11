@@ -1,11 +1,11 @@
-plugins {
-    id 'com.android.application' version '8.0.0' apply true
-}
-
+// 项目级配置
 buildscript {
     repositories {
         google()
         mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.0.0'
     }
 }
 
@@ -14,6 +14,11 @@ allprojects {
         google()
         mavenCentral()
     }
+}
+
+// 模块级配置
+plugins {
+    id 'com.android.application'
 }
 
 android {
