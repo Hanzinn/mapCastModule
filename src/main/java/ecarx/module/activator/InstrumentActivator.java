@@ -12,6 +12,8 @@ import java.lang.reflect.Method;
 
 import ecarx.module.protocol.AMapBroadcastProtocol;
 import ecarx.module.utils.DebugLogger;
+import java.util.Map;
+
 
 /**
  * 仪表激活器
