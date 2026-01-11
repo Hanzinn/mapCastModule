@@ -1,9 +1,14 @@
-// 应用 Android 应用插件
-plugins {
-    id 'com.android.application' version '8.0.0' apply false
+// 项目级配置
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.0.0'
+    }
 }
 
-// 项目级仓库配置
 allprojects {
     repositories {
         google()
@@ -11,11 +16,10 @@ allprojects {
     }
 }
 
-// 应用插件并进行模块配置
+// 应用插件
 apply plugin: 'com.android.application'
 
 android {
-    // AGP 8.0 及以上版本必须指定
     namespace 'ecarx.module.amapprojection'
     compileSdkVersion 33
 
@@ -51,7 +55,7 @@ dependencies {
     compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
 }
 
-// 定义 clean 任务，避免 Task 'clean' not found 错误
+// 定义 clean 任务
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
