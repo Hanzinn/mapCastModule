@@ -7,6 +7,9 @@ import android.util.Log;
 
 import java.lang.reflect.Method;
 
+import java.util.Map;
+
+
 /**
  * 高德地图广播协议实现
  * 实现高德车机版标准广播协议，用于与高德地图通信
