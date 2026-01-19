@@ -7,8 +7,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Bundle;
 
-import java.lang.reflect.Field;
-
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
@@ -25,15 +23,16 @@ public class MainHook implements IXposedHookLoadPackage {
     public static final String ACTION_PING = "com.xsf.amaphelper.PING";
     public static final String ACTION_PONG = "com.xsf.amaphelper.PONG";
 
-    // ⬇️⬇️⬇️ 根据你的 smali 修正的类名 ⬇️⬇️⬇️
-    // 总线类 (来自 b.smali)
+    // ⬇️⬇️⬇️ 最终确认的混淆类名 ⬇️⬇️⬇️
+    // 总线类
     private static final String CLS_BUS = "ecarx.naviservice.b.b";
-    // 信封类 (来自 ck.smali)
+    // 信封类 (Wrapper)
     private static final String CLS_WRAPPER = "ecarx.naviservice.map.ck";
     
     // 实体类
-    private static final String CLS_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
-    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
+    private static final String CLS_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo"; // 这个没混淆
+    // 🔴 修正：状态类混淆名为 j
+    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.j";
     
     private static final String ACTION_AMAP_STANDARD = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
@@ -57,9 +56,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (context != null) {
                     logProxy(context, "✅ Hook 注入成功! (PID: " + android.os.Process.myPid() + ")");
                     
-                    // 打印一下确认类是否找到
+                    // 验证类是否存在
                     checkClassExist(lpparam.classLoader, context, CLS_BUS);
-                    checkClassExist(lpparam.classLoader, context, CLS_WRAPPER);
+                    checkClassExist(lpparam.classLoader, context, CLS_STATUS_INFO);
                     
                     registerCombinedReceiver(context, lpparam.classLoader);
                 }
@@ -133,7 +132,7 @@ public class MainHook implements IXposedHookLoadPackage {
             } 
             else if (keyType == 10019) {
                 int state = getInt(intent, "EXTRA_STATE", "extra_state");
-                // 巡航(2) 或 空闲(0) 都显示地图
+                // 强制显示地图 (State 0 或 2)
                 if (state == 2 || state == 0) { 
                     sendStatusToBus(cl, 13, ctx); 
                     sendGuideToBus(cl, "地图已连接", "巡航模式", 1, 0, 0, 0, ctx);
@@ -158,15 +157,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private String getString(Intent i, String k1, String k2) { return (i.getStringExtra(k1) != null) ? i.getStringExtra(k1) : i.getStringExtra(k2); }
     private int getInt(Intent i, String k1, String k2) { return (i.getIntExtra(k1, -1) != -1) ? i.getIntExtra(k1, -1) : i.getIntExtra(k2, 0); }
 
-    private void handleAdbGuide(Intent intent, ClassLoader cl, Context ctx) {
-        String cur = intent.getStringExtra("curRoad");
-        if ("cruise_test".equals(cur)) { sendStatusToBus(cl, 13, ctx); sendGuideToBus(cl, "当前道路", "巡航中", 1, 1, 1, 60, ctx); return; }
-        sendGuideToBus(cl, cur, intent.getStringExtra("nextRoad"), intent.getIntExtra("icon", 1), intent.getIntExtra("distance", 0), 0, 0, ctx);
-    }
-    private void handleAdbStatus(Intent intent, ClassLoader cl, Context ctx) { sendStatusToBus(cl, intent.getIntExtra("status", 0), ctx); }
-
     // =======================================================
-    // 🔴 暴力反射核心区：不再依赖 setXxx 方法名，直接改变量 🔴
+    // 🔴 发送核心区 (精准反射版) 🔴
     // =======================================================
 
     private void sendGuideToBus(ClassLoader cl, String cur, String next, int icon, int dist, int totalDist, int totalTime, Context ctx) {
@@ -174,12 +166,11 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             
+            // 导航信息类 (MapGuideInfo)
             Class<?> guideClass = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
-            // 构造函数需要一个int参数，smali里看到的
             Object guideInfo = XposedHelpers.newInstance(guideClass, 1);
 
-            // ⬇️ 直接给变量赋值，不调用set方法了，防止方法被改名 ⬇️
-            // 你的 smali 显示变量名就是这些，没有混淆
+            // 直接赋值给变量 (变量名未混淆)
             XposedHelpers.setObjectField(guideInfo, "curRoadName", cur);
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", next);
             XposedHelpers.setIntField(guideInfo, "turnId", icon); 
@@ -188,6 +179,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "remainTime", totalTime);
 
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            // ck 的构造函数是 (int, Object)
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d0, guideInfo); 
             
             XposedHelpers.callMethod(busInstance, "a", msg);
@@ -195,26 +187,29 @@ public class MainHook implements IXposedHookLoadPackage {
             logProxy(ctx, "Guide Error: " + t.toString()); 
         }
     }
+    
+    private void handleAdbGuide(Intent intent, ClassLoader cl, Context ctx) {
+        String cur = intent.getStringExtra("curRoad");
+        if ("cruise_test".equals(cur)) { sendStatusToBus(cl, 13, ctx); sendGuideToBus(cl, "当前道路", "巡航中", 1, 1, 1, 60, ctx); return; }
+        sendGuideToBus(cl, cur, intent.getStringExtra("nextRoad"), intent.getIntExtra("icon", 1), intent.getIntExtra("distance", 0), 0, 0, ctx);
+    }
+    private void handleAdbStatus(Intent intent, ClassLoader cl, Context ctx) { sendStatusToBus(cl, intent.getIntExtra("status", 0), ctx); }
 
     private void sendStatusToBus(ClassLoader cl, int status, Context ctx) {
         try {
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             
+            // 🔴 状态类 (混淆名: j)
             Class<?> statusClass = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-            Object statusObj = null;
-            
-            // 尝试创建实例
-            try { statusObj = XposedHelpers.newInstance(statusClass); }
-            catch (Throwable t) { statusObj = XposedHelpers.newInstance(statusClass, 1); } // 备用构造函数
+            Object statusObj = XposedHelpers.newInstance(statusClass);
 
-            // ⬇️ 暴力赋值：找到类里第一个 int 类型的变量，把它改成我们的状态值 ⬇️
-            // 这样不管它叫 "status" 还是 "a" 还是 "z"，都能成功
-            Field statusField = XposedHelpers.findFirstFieldByExactType(statusClass, int.class);
-            statusField.setAccessible(true);
-            statusField.setInt(statusObj, status);
+            // 🔴 字段赋值 (混淆字段名: a)
+            // 之前报错是因为我们找 status，实际它叫 a
+            XposedHelpers.setIntField(statusObj, "a", status);
             
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            // 构造消息 0x7d2
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d2, statusObj); 
             
             XposedHelpers.callMethod(busInstance, "a", msg);
