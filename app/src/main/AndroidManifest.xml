@@ -6,27 +6,28 @@
 
     <application
         android:allowBackup="true"
-        android:label="高德投屏助手"
-        android:requestLegacyExternalStorage="true" 
-        android:theme="@android:style/Theme.DeviceDefault.Light">
-        <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="高德9.1适配 + 巡航同显 + 日志抓取" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="53" />
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:windowSoftInputMode="adjustResize">
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MapCastModule"
+        android:requestLegacyExternalStorage="true"> <activity android:name=".MainActivity"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="吉利车机高德地图投屏修复模块" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="54" />
     </application>
+
 </manifest>
