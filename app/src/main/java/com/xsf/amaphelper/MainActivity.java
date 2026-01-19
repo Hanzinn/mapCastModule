@@ -48,7 +48,7 @@ public class MainActivity extends Activity {
         initViews();
         checkPermission();
         
-        // 注册广播监听 (一直监听，但在 onReceive 里判断是否记录)
+        // 注册广播监听
         IntentFilter filter = new IntentFilter();
         filter.addAction("com.xsf.amaphelper.LOG_UPDATE");
         registerReceiver(logReceiver, filter);
@@ -70,12 +70,16 @@ public class MainActivity extends Activity {
         // 按钮：保存到 Download
         findViewById(R.id.btn_save_log).setOnClickListener(v -> saveLogToDownload());
 
-        // 测试按钮 (保留)
+        // 测试按钮 1：激活导航 (已修复反馈)
         findViewById(R.id.btn_test_start).setOnClickListener(v -> sendCmd("XSF_ACTION_SEND_STATUS", "status", 13));
+        
+        // 测试按钮 2：发送路口
         findViewById(R.id.btn_test_guide).setOnClickListener(v -> {
             sendCmdGuide();
             if(isRecording) appendLog("手动发送: 路口测试");
         });
+        
+        // 测试按钮 3：模拟巡航
         findViewById(R.id.btn_test_cruise).setOnClickListener(v -> {
              Intent intent = new Intent("XSF_ACTION_SEND_GUIDE");
              intent.putExtra("curRoad", "cruise_test");
@@ -88,20 +92,18 @@ public class MainActivity extends Activity {
     private void toggleLogging() {
         isRecording = !isRecording;
         if (isRecording) {
-            // 开始记录
             logBuffer.setLength(0); // 清空旧缓存
             tvLog.setText("");      // 清空屏幕
             appendLog("=== 开始抓取日志 ===");
             
             btnToggleLog.setText("停止抓取");
-            btnToggleLog.setBackgroundColor(Color.RED); // 变红提醒
+            btnToggleLog.setBackgroundColor(Color.RED); 
             tvLogStatus.setText("当前状态：正在记录中... (请操作高德)");
             tvLogStatus.setTextColor(Color.RED);
         } else {
-            // 停止记录
             appendLog("=== 日志抓取结束 ===");
             btnToggleLog.setText("开始抓取日志");
-            btnToggleLog.setBackgroundColor(Color.parseColor("#4CAF50")); // 变绿
+            btnToggleLog.setBackgroundColor(Color.parseColor("#4CAF50")); 
             tvLogStatus.setText("当前状态：已停止 (点击右侧按钮保存)");
             tvLogStatus.setTextColor(Color.GRAY);
         }
@@ -114,11 +116,9 @@ public class MainActivity extends Activity {
             return;
         }
         try {
-            // 找到 Download 文件夹
             File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             if (!downloadDir.exists()) downloadDir.mkdirs();
 
-            // 生成文件名: XSF_Log_20231024_123055.txt
             String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
             String fileName = "XSF_Log_" + timeStamp + ".txt";
             File file = new File(downloadDir, fileName);
@@ -139,14 +139,11 @@ public class MainActivity extends Activity {
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
         String line = "[" + time + "] " + msg + "\n";
         
-        // 写入缓存
         logBuffer.append(line);
         
-        // 更新界面
         runOnUiThread(() -> {
-            if (tvLog.getText().length() > 8000) tvLog.setText(""); // 防卡顿
+            if (tvLog.getText().length() > 8000) tvLog.setText(""); 
             tvLog.append(line);
-            // 滚动到底部
             int scrollAmount = tvLog.getLayout().getLineTop(tvLog.getLineCount()) - tvLog.getHeight();
             if (scrollAmount > 0) tvLog.scrollTo(0, scrollAmount);
         });
@@ -168,12 +165,15 @@ public class MainActivity extends Activity {
         }
     }
     
-    // 发送指令辅助方法
+    // 发送指令辅助方法 (这里修复了，加了日志反馈)
     private void sendCmd(String action, String key, int val) {
         Intent intent = new Intent(action);
         intent.putExtra(key, val);
         sendBroadcast(intent);
+        
+        if(isRecording) appendLog("手动发送指令: " + key + "=" + val);
     }
+
     private void sendCmdGuide() {
         Intent intent = new Intent("XSF_ACTION_SEND_GUIDE");
         intent.putExtra("curRoad", "测试路");
