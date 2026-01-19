@@ -16,16 +16,21 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class MainHook implements IXposedHookLoadPackage {
 
     private static final String TAG = "LSPosed_Navi";
+    // 目标包名
     private static final String PKG_XSF = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
     public static final String ACTION_LOG_UPDATE = "com.xsf.amaphelper.LOG_UPDATE";
-    // 新增：握手信号
     public static final String ACTION_PING = "com.xsf.amaphelper.PING";
     public static final String ACTION_PONG = "com.xsf.amaphelper.PONG";
 
-    private static final String CLS_BUS = "ecarx.naviservice.d.e";
-    private static final String CLS_WRAPPER = "ecarx.naviservice.map.bz";
+    // 🔴 关键修改：根据你提取的 smali 文件修正类名 🔴
+    // 总线类 (来自 b.smali)
+    private static final String CLS_BUS = "ecarx.naviservice.b.b";
+    // 信封类 (来自 ck.smali)
+    private static final String CLS_WRAPPER = "ecarx.naviservice.map.ck";
+    
+    // 这两个实体类通常不混淆，如果报错再改
     private static final String CLS_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
     private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
     
@@ -49,8 +54,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 Application app = (Application) param.thisObject;
                 Context context = app.getApplicationContext();
                 if (context != null) {
-                    logProxy(context, "✅ Hook 注入成功 (PID: " + android.os.Process.myPid() + ")");
+                    logProxy(context, "✅ Hook 注入成功! (PID: " + android.os.Process.myPid() + ")");
+                    
+                    // 打印一下确认类是否找到
                     checkClassExist(lpparam.classLoader, context, CLS_BUS);
+                    checkClassExist(lpparam.classLoader, context, CLS_WRAPPER);
+                    
                     registerCombinedReceiver(context, lpparam.classLoader);
                 }
             }
@@ -60,9 +69,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private void checkClassExist(ClassLoader cl, Context ctx, String className) {
         try {
             Class<?> c = XposedHelpers.findClass(className, cl);
-            logProxy(ctx, "✅ 类检查通过: " + className);
+            logProxy(ctx, "✅ 找到类: " + className);
         } catch (Throwable t) {
-            logProxy(ctx, "❌ 类检查失败: " + className);
+            logProxy(ctx, "❌ 找不到类: " + className);
         }
     }
 
@@ -73,14 +82,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 String action = intent.getAction();
                 if (action == null) return;
 
-                // --- 握手逻辑 (新增) ---
+                // 握手回应
                 if (ACTION_PING.equals(action)) {
-                    // 收到APP的询问，立马回复
                     Intent pong = new Intent(ACTION_PONG);
-                    pong.putExtra("pid", android.os.Process.myPid()); // 告诉APP我的进程ID
+                    pong.putExtra("pid", android.os.Process.myPid());
                     pong.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
                     context.sendBroadcast(pong);
-                    logProxy(context, "收到握手请求(PING)，已回复(PONG)");
                     return;
                 }
 
@@ -101,13 +108,12 @@ public class MainHook implements IXposedHookLoadPackage {
         filter.addAction(ACTION_AMAP_STANDARD);
         filter.addAction("XSF_ACTION_SEND_GUIDE");
         filter.addAction("XSF_ACTION_SEND_STATUS");
-        filter.addAction(ACTION_PING); // 监听 PING
+        filter.addAction(ACTION_PING);
         
         context.registerReceiver(receiver, filter);
-        logProxy(context, "监听就绪，等待高德或握手...");
+        logProxy(context, "监听就绪，等待高德数据...");
     }
 
-    // --- 下面是具体的处理逻辑 (保持不变) ---
     private void handleAmapStandardBroadcast(Intent intent, ClassLoader cl, Context ctx) {
         try {
             int keyType = intent.getIntExtra("KEY_TYPE", 0);
@@ -127,9 +133,9 @@ public class MainHook implements IXposedHookLoadPackage {
             } 
             else if (keyType == 10019) {
                 int state = getInt(intent, "EXTRA_STATE", "extra_state");
-                logProxy(ctx, ">> 状态变更: " + state);
+                // 只要状态是 2 (巡航) 或 0 (空闲)，都强制显示地图
                 if (state == 2 || state == 0) { 
-                    logProxy(ctx, ">> 伪装巡航模式");
+                    // logProxy(ctx, ">> 强制显示巡航"); // 日志太多可以注释掉
                     sendStatusToBus(cl, 13, ctx); 
                     sendGuideToBus(cl, "地图已连接", "巡航模式", 1, 0, 0, 0, ctx);
                 } else if (state == 9 || state == 1) {
@@ -152,7 +158,8 @@ public class MainHook implements IXposedHookLoadPackage {
     
     private String getString(Intent i, String k1, String k2) { return (i.getStringExtra(k1) != null) ? i.getStringExtra(k1) : i.getStringExtra(k2); }
     private int getInt(Intent i, String k1, String k2) { return (i.getIntExtra(k1, -1) != -1) ? i.getIntExtra(k1, -1) : i.getIntExtra(k2, 0); }
-    private String getBundleString(Intent intent) { return "KeyType=" + intent.getIntExtra("KEY_TYPE", 0); }
+
+    // --- 反射部分 (核心) ---
 
     private void handleAdbGuide(Intent intent, ClassLoader cl, Context ctx) {
         String cur = intent.getStringExtra("curRoad");
@@ -163,8 +170,11 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void sendGuideToBus(ClassLoader cl, String cur, String next, int icon, int dist, int totalDist, int totalTime, Context ctx) {
         try {
+            // 1. 获取总线单例 (b.smali)
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
+            
+            // 2. 创建导航数据对象 (MapGuideInfo)
             Class<?> guideClass = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
             Object guideInfo = XposedHelpers.newInstance(guideClass, 1);
             XposedHelpers.callMethod(guideInfo, "setCurRoadName", cur);
@@ -173,21 +183,34 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.callMethod(guideInfo, "setNextTurnDistance", dist);
             XposedHelpers.callMethod(guideInfo, "setRemainDistance", totalDist);
             XposedHelpers.callMethod(guideInfo, "setRemainTime", totalTime);
+
+            // 3. 打包进信封 (ck.smali)
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            // 构造函数是 (int, Object)
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d0, guideInfo); 
+            
+            // 4. 发送
             XposedHelpers.callMethod(busInstance, "a", msg);
-        } catch (Throwable t) { logProxy(ctx, "Reflect Err: " + t.toString()); }
+        } catch (Throwable t) { 
+            logProxy(ctx, "反射发送失败(Guide): " + t.toString()); 
+        }
     }
+
     private void sendStatusToBus(ClassLoader cl, int status, Context ctx) {
         try {
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
+            
             Class<?> statusClass = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
             Object statusObj = XposedHelpers.newInstance(statusClass, 1);
             XposedHelpers.callMethod(statusObj, "setStatus", status);
+            
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d2, statusObj); 
+            
             XposedHelpers.callMethod(busInstance, "a", msg);
-        } catch (Throwable t) { logProxy(ctx, "Reflect Err: " + t.toString()); }
+        } catch (Throwable t) { 
+            logProxy(ctx, "反射发送失败(Status): " + t.toString()); 
+        }
     }
 }
