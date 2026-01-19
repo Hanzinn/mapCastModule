@@ -1,9 +1,0 @@
-id=amap_projection_enabler
-name=高德地图投屏启用模块
-version=1.0.0
-versionCode=1
-author=YourName
-description=启用高德地图9.1版本对车机仪表的投屏功能，支持导航和巡航模式下的仪表同显
-minApiVersion=93
-targetApiVersion=93
-updateJson=https://raw.githubusercontent.com/yourname/amap_projection/main/update.json
