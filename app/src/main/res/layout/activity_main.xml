@@ -3,42 +3,80 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="20dp"
+    android:padding="10dp"
     android:gravity="center_horizontal">
 
     <TextView
         android:id="@+id/tv_status"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="模块状态：检测中..."
-        android:textSize="22sp"
+        android:text="模块检测中..."
+        android:textSize="16sp"
         android:textStyle="bold"
-        android:layout_marginBottom="30dp"/>
+        android:layout_marginBottom="5dp"/>
 
-    <Button
-        android:id="@+id/btn_test_start"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="测试：激活导航状态" />
+        android:orientation="horizontal"
+        android:layout_marginBottom="5dp">
 
-    <Button
-        android:id="@+id/btn_test_guide"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="测试：发送路口信息" />
+        <Button
+            android:id="@+id/btn_toggle_log"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="开始抓取日志"
+            android:backgroundTint="#4CAF50"
+            android:textColor="#FFFFFF"
+            android:layout_marginEnd="5dp"/>
 
-    <Button
-        android:id="@+id/btn_test_cruise"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="测试：模拟巡航模式"
-        android:backgroundTint="#009688"
-        android:textColor="#FFFFFF"/>
+        <Button
+            android:id="@+id/btn_save_log"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="保存到 Download"
+            android:backgroundTint="#2196F3"
+            android:textColor="#FFFFFF"/>
+    </LinearLayout>
     
     <TextView
+        android:id="@+id/tv_log_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="当前状态：停止记录"
+        android:textColor="#888888"
+        android:textSize="12sp"
+        android:layout_marginBottom="10dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="--- 手动测试工具 ---"
+        android:textSize="10sp"
+        android:textColor="#AAAAAA"/>
+
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
-        android:text="请在LSPosed勾选 ecarx.naviservice 和 本应用"
-        android:textSize="14sp"/>
+        android:orientation="horizontal">
+        <Button android:id="@+id/btn_test_start" android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content" android:text="激活导航" android:textSize="12sp"/>
+        <Button android:id="@+id/btn_test_guide" android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content" android:text="发送路口" android:textSize="12sp"/>
+        <Button android:id="@+id/btn_test_cruise" android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content" android:text="模拟巡航" android:textSize="12sp"/>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tv_log"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#222222"
+        android:textColor="#00FF00"
+        android:textSize="10sp"
+        android:padding="5dp"
+        android:fontFamily="monospace"
+        android:scrollbars="vertical"
+        android:gravity="bottom"
+        android:text="等待开始..." />
+
 </LinearLayout>
