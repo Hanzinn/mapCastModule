@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.xsf.amaphelper">
+
+    <application
+        android:allowBackup="true"
+        android:label="高德投屏助手"
+        android:theme="@android:style/Theme.DeviceDefault.Light">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="高德9.1适配 + 巡航同显 + 控制面板" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="53" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
