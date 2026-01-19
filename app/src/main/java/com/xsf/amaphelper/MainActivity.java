@@ -70,13 +70,18 @@ public class MainActivity extends Activity {
         // 按钮：保存到 Download
         findViewById(R.id.btn_save_log).setOnClickListener(v -> saveLogToDownload());
 
-        // 测试按钮 1：激活导航 (已修复反馈)
-        findViewById(R.id.btn_test_start).setOnClickListener(v -> sendCmd("XSF_ACTION_SEND_STATUS", "status", 13));
+        // --- 这里修改了显示逻辑，让日志更人话 ---
+        
+        // 测试按钮 1：激活导航
+        findViewById(R.id.btn_test_start).setOnClickListener(v -> {
+            sendCmd("XSF_ACTION_SEND_STATUS", "status", 13);
+            if(isRecording) appendLog("手动发送: 激活导航"); // 现在显示这个中文了
+        });
         
         // 测试按钮 2：发送路口
         findViewById(R.id.btn_test_guide).setOnClickListener(v -> {
             sendCmdGuide();
-            if(isRecording) appendLog("手动发送: 路口测试");
+            if(isRecording) appendLog("手动发送: 路口测试信息");
         });
         
         // 测试按钮 3：模拟巡航
@@ -84,7 +89,7 @@ public class MainActivity extends Activity {
              Intent intent = new Intent("XSF_ACTION_SEND_GUIDE");
              intent.putExtra("curRoad", "cruise_test");
              sendBroadcast(intent);
-             if(isRecording) appendLog("手动发送: 巡航测试");
+             if(isRecording) appendLog("手动发送: 模拟巡航模式");
         });
     }
 
@@ -165,13 +170,11 @@ public class MainActivity extends Activity {
         }
     }
     
-    // 发送指令辅助方法 (这里修复了，加了日志反馈)
+    // 发送指令辅助方法 (改回纯发送，不带日志)
     private void sendCmd(String action, String key, int val) {
         Intent intent = new Intent(action);
         intent.putExtra(key, val);
         sendBroadcast(intent);
-        
-        if(isRecording) appendLog("手动发送指令: " + key + "=" + val);
     }
 
     private void sendCmdGuide() {
