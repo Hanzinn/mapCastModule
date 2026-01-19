@@ -31,7 +31,6 @@ public class MainActivity extends Activity {
     private ScrollView scrollSniff, scrollSys;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
-    // 🔴 关键方法：Xposed Hook 此方法来改变状态
     public boolean isModuleActive() {
         return false;
     }
@@ -42,7 +41,6 @@ public class MainActivity extends Activity {
             String content = intent.getStringExtra("log");
             int type = intent.getIntExtra("type", 0);
             
-            // 收到 Hook 成功消息自动更新状态
             if (content != null && content.contains("模块加载成功")) {
                 updateHookStatus(true);
             }
@@ -67,14 +65,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        
-        // 去掉标题栏
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setContentView(R.layout.activity_main);
         
-        checkPermission(); // 申请存储权限
+        checkPermission();
 
-        // 绑定视图
         tvLspStatus = findViewById(R.id.tv_lsp_status);
         tvHookStatus = findViewById(R.id.tv_hook_status);
         tvLogSniff = findViewById(R.id.tv_log_sniff);
@@ -85,25 +80,22 @@ public class MainActivity extends Activity {
         registerReceiver(logReceiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
         refreshStatus();
 
-        // === 左侧逻辑 ===
-        Button btnSniff = findViewById(R.id.btn_sniff_toggle);
-        btnSniff.setOnClickListener(v -> {
+        findViewById(R.id.btn_sniff_toggle).setOnClickListener(v -> {
             isSniffing = !isSniffing;
             sendBroadcast(new Intent("com.xsf.amaphelper.TOGGLE_SNIFF"));
-            
+            Button btn = (Button) v;
             if (isSniffing) {
-                btnSniff.setText("🟢 抓包中 (点击停止)");
-                btnSniff.setBackgroundColor(Color.RED);
+                btn.setText("🟢 抓包中 (点击停止)");
+                btn.setBackgroundColor(Color.RED);
             } else {
-                btnSniff.setText("🔴 开启抓包 (关)");
-                btnSniff.setBackgroundColor(Color.parseColor("#673AB7"));
+                btn.setText("🔴 开启抓包 (关)");
+                btn.setBackgroundColor(Color.parseColor("#673AB7"));
             }
         });
 
         findViewById(R.id.btn_sniff_save).setOnClickListener(v -> saveLogToDownload(tvLogSniff.getText().toString(), "Sniff_"));
         findViewById(R.id.btn_sniff_clear).setOnClickListener(v -> tvLogSniff.setText(""));
 
-        // === 右侧逻辑 ===
         findViewById(R.id.btn_activate).setOnClickListener(v -> {
             Intent i = new Intent("XSF_ACTION_SEND_STATUS");
             i.putExtra("status", 13);
@@ -154,12 +146,6 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "日志为空", Toast.LENGTH_SHORT).show();
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 100);
-                return;
-            }
-        }
         try {
             File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             if (!downloadDir.exists()) downloadDir.mkdirs();
@@ -177,9 +163,8 @@ public class MainActivity extends Activity {
 
     private void checkPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            String[] permissions = {Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE};
-            if (checkSelfPermission(permissions[0]) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(permissions, 100);
+            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE}, 100);
             }
         }
     }
