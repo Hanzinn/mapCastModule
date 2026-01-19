@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
         // 测试按钮 2：发送路口
         findViewById(R.id.btn_test_guide).setOnClickListener(v -> {
             sendCmdGuide();
-            if(isRecording) appendLog("手动发送: 路口测试信息");
+            if(isRecording) appendLog("手动发送: 路口测试");
         });
         
         // 测试按钮 3：模拟巡航
@@ -89,7 +89,7 @@ public class MainActivity extends Activity {
              Intent intent = new Intent("XSF_ACTION_SEND_GUIDE");
              intent.putExtra("curRoad", "cruise_test");
              sendBroadcast(intent);
-             if(isRecording) appendLog("手动发送: 模拟巡航模式");
+             if(isRecording) appendLog("手动发送: 模拟巡航");
         });
     }
 
