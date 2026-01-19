@@ -1,42 +1,33 @@
-name: Build Xposed Module
+name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Debug - Show files
-        run: |
-          echo "=== 当前目录文件列表 ==="
-          ls -la
-          echo "=== settings.gradle 内容 ==="
-          cat settings.gradle
-          echo "=== build.gradle 前10行 ==="
-          head -10 build.gradle
-      
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: 17
-      
-      - name: Build APK
-        run: |
-          chmod +x ./gradlew
-          ./gradlew clean assembleRelease --no-daemon --no-build-cache --refresh-dependencies
-      
-      - name: Debug - Find APK path
-        run: |
-          echo "=== 搜索所有APK文件 ==="
-          find . -name "*.apk" -type f
-      
-      - uses: actions/upload-artifact@v4
-        with:
-          name: amapprojection-apk
-          path: build/outputs/apk/release/mapCastModule-release-unsigned.apk  # 改成实际路径
 
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: GaoDe-Helper-APK
+        path: app/build/outputs/apk/debug/app-debug.apk
