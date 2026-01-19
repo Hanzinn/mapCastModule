@@ -24,17 +24,16 @@ public class MainHook implements IXposedHookLoadPackage {
     public static final String ACTION_PING = "com.xsf.amaphelper.PING";
     public static final String ACTION_PONG = "com.xsf.amaphelper.PONG";
 
-    // ⬇️⬇️⬇️ 最终校正的类名 ⬇️⬇️⬇️
-    // 1. 总线：改回 d.e (日志证明 b.b 是错的)
+    // ⬇️⬇️⬇️ 最终确定的正确名单 ⬇️⬇️⬇️
+    // 1. 总线：d.e (路口测试不报错，说明它是对的)
     private static final String CLS_BUS = "ecarx.naviservice.d.e";
     
-    // 2. 信封：改回 bz (ck是抽象类，不能实例化，bz才是对的)
+    // 2. 信封：bz (路口测试不报错，说明它是对的)
     private static final String CLS_WRAPPER = "ecarx.naviservice.map.bz";
     
-    // 3. 实体类
+    // 3. 实体类：MapStatusInfo (最早的日志证明它存在)
     private static final String CLS_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
-    // 状态类：j (你发现的文件)
-    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.j";
+    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
     
     private static final String ACTION_AMAP_STANDARD = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
@@ -54,11 +53,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 Context context = app.getApplicationContext();
                 if (context != null) {
                     logProxy(context, "✅ Hook 注入成功! PID=" + android.os.Process.myPid());
-                    // 检查类是否存在，心里有底
+                    // 再次确认类是否存在
                     checkClass(lpparam.classLoader, context, CLS_BUS);
                     checkClass(lpparam.classLoader, context, CLS_WRAPPER);
                     checkClass(lpparam.classLoader, context, CLS_STATUS_INFO);
-                    
                     registerCombinedReceiver(context, lpparam.classLoader);
                 }
             }
@@ -99,7 +97,7 @@ public class MainHook implements IXposedHookLoadPackage {
         filter.addAction("XSF_ACTION_SEND_STATUS");
         filter.addAction(ACTION_PING);
         context.registerReceiver(receiver, filter);
-        logProxy(context, "监听就绪 (Bus: d.e | Wrap: bz)...");
+        logProxy(context, "监听就绪 (d.e | bz | MapStatusInfo)...");
     }
 
     private void handleAmapStandardBroadcast(Intent intent, ClassLoader cl, Context ctx) {
@@ -143,35 +141,37 @@ public class MainHook implements IXposedHookLoadPackage {
     private int getInt(Intent i, String k1, String k2) { return (i.getIntExtra(k1, -1) != -1) ? i.getIntExtra(k1, -1) : i.getIntExtra(k2, 0); }
 
     // =======================================================
-    // 🔴 核心发送逻辑 🔴
+    // 🔴 智能状态发送 (修复 Status 报错) 🔴
     // =======================================================
     
     private void sendStatusToBus(ClassLoader cl, int status, Context ctx) {
         try {
-            // 1. 获取总线 (d.e)
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             
-            // 2. 获取状态对象 (j)
+            // 1. 获取 MapStatusInfo (肯定存在)
             Class<?> statusClass = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-            Object statusObj = XposedHelpers.newInstance(statusClass);
+            Object statusObj = null;
+            
+            // 2. 尝试实例化 (有的版本需要参数，有的不需要)
+            try { statusObj = XposedHelpers.newInstance(statusClass); }
+            catch (Throwable t) { statusObj = XposedHelpers.newInstance(statusClass, 1); }
 
-            // 3. 自动寻找 int 字段并赋值 (万能钥匙)
+            // 3. 🔴 智能赋值：找到类里唯一的 int 变量
+            // 你的 smali 显示它有 setStatus 方法，但反射说没有
+            // 那我们就直接找 int 变量，不管它叫 a 还是 status
             Field field = XposedHelpers.findFirstFieldByExactType(statusClass, int.class);
             if (field != null) {
                 field.setAccessible(true);
                 field.setInt(statusObj, status);
             } else {
-                logProxy(ctx, "❌ 严重错误: 类 j 里面没有 int 字段？");
+                logProxy(ctx, "❌ 严重异常: MapStatusInfo 里居然没有 int 变量？");
                 return;
             }
             
-            // 4. 打包进信封 (bz) - 注意这里是 bz
+            // 4. 打包发送 (使用 bz)
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
-            // bz 的构造函数是 (int, Object)
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d2, statusObj); 
-            
-            // 5. 发送
             XposedHelpers.callMethod(busInstance, "a", msg);
             
             logProxy(ctx, "✅ 状态发送成功! (Status=" + status + ")");
@@ -185,11 +185,10 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             
-            // 导航信息 (MapGuideInfo)
             Class<?> guideClass = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
             Object guideInfo = XposedHelpers.newInstance(guideClass, 1);
             
-            // 赋值
+            // 这里用变量名赋值，因为之前的测试证明路口信息没报错
             XposedHelpers.setObjectField(guideInfo, "curRoadName", cur);
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", next);
             XposedHelpers.setIntField(guideInfo, "turnId", icon); 
@@ -197,12 +196,12 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "remainDistance", totalDist);
             XposedHelpers.setIntField(guideInfo, "remainTime", totalTime);
             
-            // 打包 (bz)
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d0, guideInfo); 
             
             XposedHelpers.callMethod(busInstance, "a", msg);
         } catch (Throwable t) { 
+            // 这里的错误会被打印出来，但之前日志没有，说明这里已经通了
             logProxy(ctx, "Guide Error: " + t.toString()); 
         }
     }
