@@ -15,6 +15,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import java.lang.reflect.Field; // 👈 补上了这个关键引用
 import java.util.Set;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -30,7 +31,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
     public static final String ACTION_LOG_UPDATE = "com.xsf.amaphelper.LOG_UPDATE";
-    // 专门定义的抓包开关广播
     public static final String ACTION_TOGGLE_SNIFF = "com.xsf.amaphelper.TOGGLE_SNIFF";
 
     // ⬇️ 配置区
@@ -44,21 +44,17 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String ACTION_SDK = "com.autonavi.minimap.SEND_BROADCAST"; 
     private static final String ACTION_CAR = "com.autonavi.amapauto.SEND_BROADCAST";
     
-    // 🚩 抓包开关 (默认为 false，需手动开启)
+    // 🚩 抓包开关
     private static boolean isSniffing = false; 
     
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         
-        // -----------------------------------------------------------
-        // 1. 如果是助手 APP 自己：不仅激活模块，还要注入一个按钮！
-        // -----------------------------------------------------------
+        // 1. 助手 APP：注入按钮
         if (lpparam.packageName.equals(PKG_SELF)) {
-            // 激活显示
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, 
                 "isModuleActive", XC_MethodReplacement.returnConstant(true));
             
-            // 💉 UI 注入：在 onCreate 后插入按钮
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, 
                 "onCreate", Bundle.class, new de.robv.android.xposed.XC_MethodHook() {
                 @Override
@@ -70,9 +66,7 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        // -----------------------------------------------------------
-        // 2. 如果是目标车机服务：执行 Hook 逻辑
-        // -----------------------------------------------------------
+        // 2. 目标服务：Hook 逻辑
         if (!lpparam.packageName.equals(PKG_XSF)) return;
 
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new de.robv.android.xposed.XC_MethodHook() {
@@ -81,31 +75,26 @@ public class MainHook implements IXposedHookLoadPackage {
                 Application app = (Application) param.thisObject;
                 Context context = app.getApplicationContext();
                 if (context != null) {
-                    logProxy(context, "✅ 模块加载完毕 (请点击界面顶部的新按钮开始抓包)");
+                    logProxy(context, "✅ 模块加载完毕 (UI注入版)");
                     registerCombinedReceiver(context, lpparam.classLoader);
                 }
             }
         });
     }
 
-    // 💉 黑科技：动态注入按钮
+    // 💉 注入按钮
     private void injectSniffButton(Activity activity) {
         try {
-            // 创建一个按钮
             Button btn = new Button(activity);
             btn.setText("📡 点击开始抓包");
-            btn.setBackgroundColor(Color.parseColor("#FF6200EE")); // 紫色背景
+            btn.setBackgroundColor(Color.parseColor("#FF6200EE"));
             btn.setTextColor(Color.WHITE);
             btn.setPadding(20, 20, 20, 20);
             
-            // 点击事件：发送广播切换抓包状态
             btn.setOnClickListener(v -> {
                 Intent intent = new Intent(ACTION_TOGGLE_SNIFF);
-                // 这是一个从 APP 发给 System 的广播，为了稳妥，虽然 APP 没权限发给 System，
-                // 但因为我们同时 Hook 了 Service 的接收器，用普通广播即可通讯
                 activity.sendBroadcast(intent);
                 
-                // 简单的视觉反馈 (实际状态由日志决定)
                 if (btn.getText().toString().contains("开始")) {
                     btn.setText("🛑 抓包中 (点击停止)");
                     btn.setBackgroundColor(Color.RED);
@@ -115,18 +104,17 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             });
 
-            // 添加到界面顶层 (使用 FrameLayout 参数，通常 DecorView 支持)
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, 
                     ViewGroup.LayoutParams.WRAP_CONTENT
             );
-            params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL; // 居中顶部
-            params.topMargin = 100; // 稍微往下一点，避开状态栏
+            params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            params.topMargin = 150; 
 
             activity.addContentView(btn, params);
             
         } catch (Throwable t) {
-            Toast.makeText(activity, "按钮注入失败: " + t.getMessage(), Toast.LENGTH_LONG).show();
+            Toast.makeText(activity, "Btn Err: " + t.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -137,46 +125,46 @@ public class MainHook implements IXposedHookLoadPackage {
                 String action = intent.getAction();
                 if (action == null) return;
 
-                // 1. 抓包开关控制
+                // 1. 开关控制
                 if (ACTION_TOGGLE_SNIFF.equals(action)) {
                     isSniffing = !isSniffing;
-                    logProxy(context, isSniffing ? "🟢 [抓包已开启] 请切换到高德地图操作..." : "🔴 [抓包已停止]");
+                    logProxy(context, isSniffing ? "🟢 [抓包已开启] 请操作高德..." : "🔴 [抓包已停止]");
                     return;
                 }
 
-                // 2. 抓包逻辑 (核心)
+                // 2. 抓包
                 if (isSniffing) {
                     if (action.contains("autonavi") || action.contains("amap")) {
-                        logAllExtras(context, intent); // 打印数据
-                        handleAmapStandardBroadcast(intent, cl, context); // 转发尝试点亮
+                        logAllExtras(context, intent);
+                        handleAmapStandardBroadcast(intent, cl, context);
                     }
                 }
 
-                // 3. 原有功能恢复 (激活导航)
+                // 3. 激活导航 (Status 13 -> 唤醒)
                 if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                     int status = intent.getIntExtra("status", 0);
                     if (status == 13) {
-                        logProxy(context, "🚀 执行唤醒序列 (1 -> 27)");
-                        sendStatusToBus(cl, 25, ctx(context)); // 先Start (25)
+                        logProxy(context, "🚀 唤醒序列 (1->27)");
+                        sendStatusToBus(cl, 1, ctx(context)); // 修正：先发1(Start)
                         new Thread(()->{
                             try{Thread.sleep(200);}catch(Exception e){}
-                            sendStatusToBus(cl, 27, ctx(context)); // 再Navi (27)
+                            sendStatusToBus(cl, 27, ctx(context)); // 后发27(Navi)
                         }).start();
                     } else {
                         sendStatusToBus(cl, status, ctx(context));
                     }
                 }
                 
-                // 4. 原有功能恢复 (模拟巡航)
+                // 4. 模拟巡航
                 if ("XSF_ACTION_SEND_GUIDE".equals(action)) {
-                    logProxy(context, "🚗 发送模拟路口");
+                    logProxy(context, "🚗 模拟路口数据");
                     sendGuideToBus(cl, "测试路", "成功街", 1, 500, 0, 0, ctx(context));
                 }
             }
         };
 
         IntentFilter filter = new IntentFilter();
-        filter.addAction(ACTION_TOGGLE_SNIFF); // 监听新按钮
+        filter.addAction(ACTION_TOGGLE_SNIFF);
         filter.addAction(ACTION_STD);
         filter.addAction(ACTION_SDK);
         filter.addAction("com.autonavi.minimap.search.SEND_BROADCAST");
@@ -188,10 +176,8 @@ public class MainHook implements IXposedHookLoadPackage {
         context.registerReceiver(receiver, filter);
     }
 
-    // 辅助 context 获取
     private Context ctx(Context c) { return c; }
 
-    // 🖨️ 抓包打印
     private void logAllExtras(Context ctx, Intent intent) {
         try {
             Bundle bundle = intent.getExtras();
@@ -212,10 +198,7 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 转发逻辑 (bz + 25->27)
     private void handleAmapStandardBroadcast(Intent intent, ClassLoader cl, Context ctx) {
-        // 保持之前的逻辑不变...
-        // 简单写一下核心，确保编译通过
         try {
             int keyType = intent.getIntExtra("KEY_TYPE", 0);
             if (keyType == 0) keyType = intent.getIntExtra("key_type", 0);
@@ -232,10 +215,10 @@ public class MainHook implements IXposedHookLoadPackage {
             } else if (keyType == 10019) {
                 int state = getInt(intent, "EXTRA_STATE", "extra_state");
                 if (state == 2 || state == 8 || state == 12) {
-                    sendStatusToBus(cl, 25, ctx); // 25
+                    sendStatusToBus(cl, 25, ctx); 
                     new Thread(()->{
                         try{Thread.sleep(200);}catch(Exception e){}
-                        sendStatusToBus(cl, 27, ctx); // 27
+                        sendStatusToBus(cl, 27, ctx);
                     }).start();
                 } else if (state == 9 || state == 1) {
                     sendStatusToBus(cl, 26, ctx);
@@ -244,7 +227,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 发送逻辑 (bz + 轮询参数)
     private void sendStatusToBus(ClassLoader cl, int status, Context ctx) {
         try {
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
