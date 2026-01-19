@@ -3,33 +3,135 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:gravity="center"
-    android:padding="20dp">
+    android:background="#000000">
 
-    <Button
-        android:id="@+id/btn_sniff"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="80dp"
-        android:text="📡 开启高德抓包 (关)"
-        android:textSize="20sp"
-        android:backgroundTint="#673AB7"
-        android:layout_marginBottom="20dp"/>
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="5dp">
 
-    <Button
-        android:id="@+id/btn_activate"
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            
+            <Button
+                android:id="@+id/btn_sniff"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="2"
+                android:text="📡 开启抓包 (关)"
+                android:backgroundTint="#673AB7"
+                android:layout_marginEnd="5dp"/>
+            
+            <Button
+                android:id="@+id/btn_clear"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:text="🗑️ 清空"
+                android:backgroundTint="#555555"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="5dp">
+
+            <Button
+                android:id="@+id/btn_activate"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:text="🚀 激活仪表"
+                android:backgroundTint="#009688"
+                android:layout_marginEnd="5dp"/>
+
+            <Button
+                android:id="@+id/btn_guide"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:text="🚗 模拟路口"
+                android:backgroundTint="#FF9800"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="80dp"
-        android:text="🚀 强制激活仪表 (1->27)"
-        android:textSize="20sp"
-        android:backgroundTint="#009688"
-        android:layout_marginBottom="20dp"/>
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:padding="2dp">
 
-    <Button
-        android:id="@+id/btn_guide"
-        android:layout_width="match_parent"
-        android:layout_height="80dp"
-        android:text="🚗 发送模拟路口数据"
-        android:textSize="20sp"
-        android:backgroundTint="#FF9800"/>
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="#111111"
+            android:layout_marginEnd="1dp">
+            
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="=== 📡 高德抓包 ==="
+                android:textColor="#00FF00"
+                android:gravity="center"
+                android:padding="5dp"
+                android:textStyle="bold"/>
+                
+            <ScrollView
+                android:id="@+id/scroll_sniff"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+                <TextView
+                    android:id="@+id/tv_log_sniff"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#00FF00"
+                    android:textSize="10sp"
+                    android:padding="5dp"
+                    android:fontFamily="monospace"/>
+            </ScrollView>
+        </LinearLayout>
 
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#FFFFFF"/>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="#111111"
+            android:layout_marginStart="1dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="=== 🛠️ 模块日志 ==="
+                android:textColor="#FFFF00"
+                android:gravity="center"
+                android:padding="5dp"
+                android:textStyle="bold"/>
+
+            <ScrollView
+                android:id="@+id/scroll_sys"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+                <TextView
+                    android:id="@+id/tv_log_sys"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#FFFF00"
+                    android:textSize="10sp"
+                    android:padding="5dp"
+                    android:fontFamily="monospace"/>
+            </ScrollView>
+        </LinearLayout>
+    </LinearLayout>
 </LinearLayout>
