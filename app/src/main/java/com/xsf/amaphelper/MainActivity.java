@@ -31,34 +31,29 @@ public class MainActivity extends Activity {
     private ScrollView scrollSniff, scrollSys;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
-    public boolean isModuleActive() {
-        return false;
-    }
+    public boolean isModuleActive() { return false; }
 
     private BroadcastReceiver logReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             String content = intent.getStringExtra("log");
             int type = intent.getIntExtra("type", 0);
+            if (content == null) return;
             
-            if (content != null && content.contains("模块加载成功")) {
-                updateHookStatus(true);
-            }
+            if (content.contains("模块加载成功")) updateHookStatus(true);
 
             String time = sdf.format(new Date());
-            String finalLog = "[" + time + "] " + content + "\n\n";
+            final String finalLog = "[" + time + "] " + content + "\n\n";
 
-            if (type == 1) {
-                if (tvLogSniff != null) {
+            runOnUiThread(() -> {
+                if (type == 1) {
                     tvLogSniff.append(finalLog);
-                    if (scrollSniff != null) scrollSniff.post(() -> scrollSniff.fullScroll(ScrollView.FOCUS_DOWN));
-                }
-            } else {
-                if (tvLogSys != null) {
+                    scrollSniff.post(() -> scrollSniff.fullScroll(ScrollView.FOCUS_DOWN));
+                } else {
                     tvLogSys.append(finalLog);
-                    if (scrollSys != null) scrollSys.post(() -> scrollSys.fullScroll(ScrollView.FOCUS_DOWN));
+                    scrollSys.post(() -> scrollSys.fullScroll(ScrollView.FOCUS_DOWN));
                 }
-            }
+            });
         }
     };
 
@@ -77,6 +72,10 @@ public class MainActivity extends Activity {
         scrollSniff = findViewById(R.id.scroll_sniff);
         scrollSys = findViewById(R.id.scroll_sys);
         
+        // 🚀 初始化检查：如果下面两行没显示，说明 ScrollView 没能撑开显示
+        tvLogSniff.setText("--- 等待抓包日志 ---\n");
+        tvLogSys.setText("--- 等待系统日志 ---\n");
+
         registerReceiver(logReceiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
         refreshStatus();
 
@@ -84,13 +83,8 @@ public class MainActivity extends Activity {
             isSniffing = !isSniffing;
             sendBroadcast(new Intent("com.xsf.amaphelper.TOGGLE_SNIFF"));
             Button btn = (Button) v;
-            if (isSniffing) {
-                btn.setText("🟢 抓包中 (点击停止)");
-                btn.setBackgroundColor(Color.RED);
-            } else {
-                btn.setText("🔴 开启抓包 (关)");
-                btn.setBackgroundColor(Color.parseColor("#673AB7"));
-            }
+            btn.setText(isSniffing ? "停止抓包" : "开启抓包");
+            btn.setBackgroundColor(isSniffing ? Color.RED : Color.parseColor("#673AB7"));
         });
 
         findViewById(R.id.btn_sniff_save).setOnClickListener(v -> saveLogToDownload(tvLogSniff.getText().toString(), "Sniff_"));
@@ -118,47 +112,30 @@ public class MainActivity extends Activity {
         findViewById(R.id.btn_sys_clear).setOnClickListener(v -> tvLogSys.setText(""));
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refreshStatus();
-    }
+    @Override protected void onResume() { super.onResume(); refreshStatus(); }
 
     private void refreshStatus() {
-        if (isModuleActive()) {
-            tvLspStatus.setText("LSPosed: 已激活 ✅");
-            tvLspStatus.setTextColor(Color.GREEN);
-        } else {
-            tvLspStatus.setText("LSPosed: 未激活 ❌");
-            tvLspStatus.setTextColor(Color.RED);
-        }
+        boolean active = isModuleActive();
+        tvLspStatus.setText("LSPosed: " + (active ? "已激活 ✅" : "未激活 ❌"));
+        tvLspStatus.setTextColor(active ? Color.GREEN : Color.RED);
     }
     
     private void updateHookStatus(boolean success) {
-        if (success) {
-            tvHookStatus.setText("Hook服务: 已连接 ✅");
-            tvHookStatus.setTextColor(Color.GREEN);
-        }
+        tvHookStatus.setText("Hook服务: 已连接 ✅");
+        tvHookStatus.setTextColor(Color.GREEN);
     }
 
     private void saveLogToDownload(String content, String prefix) {
-        if (content == null || content.isEmpty()) {
-            Toast.makeText(this, "日志为空", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (content == null || content.isEmpty()) return;
         try {
             File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            if (!downloadDir.exists()) downloadDir.mkdirs();
-            SimpleDateFormat timeFormat = new SimpleDateFormat("MMdd_HHmmss", Locale.getDefault());
-            String fileName = prefix + timeFormat.format(new Date()) + ".txt";
+            String fileName = prefix + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
             File file = new File(downloadDir, fileName);
             FileOutputStream fos = new FileOutputStream(file);
             fos.write(content.getBytes());
             fos.close();
-            Toast.makeText(this, "✅ 已保存到 Download: " + fileName, Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
+            Toast.makeText(this, "保存成功: " + fileName, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) { Toast.makeText(this, "失败: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
     }
 
     private void checkPermission() {
@@ -169,9 +146,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        try { unregisterReceiver(logReceiver); } catch (Exception e) {}
+    @Override protected void onDestroy() { 
+        super.onDestroy(); 
+        try { unregisterReceiver(logReceiver); } catch (Exception e) {} 
     }
 }
