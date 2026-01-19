@@ -26,8 +26,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
     
     private boolean isSniffing = false;
-    private TextView tvLogSniff, tvLogSys;
-    private TextView tvLspStatus, tvHookStatus;
+    private TextView tvLogSniff, tvLogSys, tvLspStatus, tvHookStatus;
     private ScrollView scrollSniff, scrollSys;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
@@ -36,21 +35,22 @@ public class MainActivity extends Activity {
     private BroadcastReceiver logReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String content = intent.getStringExtra("log");
-            int type = intent.getIntExtra("type", 0);
+            final String content = intent.getStringExtra("log");
+            final int type = intent.getIntExtra("type", 0);
             if (content == null) return;
-            
-            if (content.contains("模块加载成功")) updateHookStatus(true);
-
-            String time = sdf.format(new Date());
-            final String finalLog = "[" + time + "] " + content + "\n\n";
 
             runOnUiThread(() -> {
+                if (content.contains("模块加载成功")) {
+                    tvHookStatus.setText("Hook服务: 已连接 ✅");
+                    tvHookStatus.setTextColor(Color.GREEN);
+                }
+                String time = sdf.format(new Date());
+                String logLine = "[" + time + "] " + content + "\n\n";
                 if (type == 1) {
-                    tvLogSniff.append(finalLog);
+                    tvLogSniff.append(logLine);
                     scrollSniff.post(() -> scrollSniff.fullScroll(ScrollView.FOCUS_DOWN));
                 } else {
-                    tvLogSys.append(finalLog);
+                    tvLogSys.append(logLine);
                     scrollSys.post(() -> scrollSys.fullScroll(ScrollView.FOCUS_DOWN));
                 }
             });
@@ -72,22 +72,22 @@ public class MainActivity extends Activity {
         scrollSniff = findViewById(R.id.scroll_sniff);
         scrollSys = findViewById(R.id.scroll_sys);
         
-        // 🚀 初始化检查：如果下面两行没显示，说明 ScrollView 没能撑开显示
-        tvLogSniff.setText("--- 等待抓包日志 ---\n");
-        tvLogSys.setText("--- 等待系统日志 ---\n");
+        tvLogSniff.setText("--- 等待抓包数据 ---\n");
+        tvLogSys.setText("--- 等待指令回执 ---\n");
 
         registerReceiver(logReceiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
         refreshStatus();
 
-        findViewById(R.id.btn_sniff_toggle).setOnClickListener(v -> {
+        // 按钮逻辑
+        final Button btnSniff = findViewById(R.id.btn_sniff_toggle);
+        btnSniff.setOnClickListener(v -> {
             isSniffing = !isSniffing;
             sendBroadcast(new Intent("com.xsf.amaphelper.TOGGLE_SNIFF"));
-            Button btn = (Button) v;
-            btn.setText(isSniffing ? "停止抓包" : "开启抓包");
-            btn.setBackgroundColor(isSniffing ? Color.RED : Color.parseColor("#673AB7"));
+            btnSniff.setText(isSniffing ? "🛑 停止抓包" : "开启抓包");
+            btnSniff.setBackgroundColor(isSniffing ? Color.RED : Color.parseColor("#673AB7"));
         });
 
-        findViewById(R.id.btn_sniff_save).setOnClickListener(v -> saveLogToDownload(tvLogSniff.getText().toString(), "Sniff_"));
+        findViewById(R.id.btn_sniff_save).setOnClickListener(v -> saveToDownload(tvLogSniff.getText().toString(), "Sniff_"));
         findViewById(R.id.btn_sniff_clear).setOnClickListener(v -> tvLogSniff.setText(""));
 
         findViewById(R.id.btn_activate).setOnClickListener(v -> {
@@ -98,7 +98,7 @@ public class MainActivity extends Activity {
 
         findViewById(R.id.btn_guide).setOnClickListener(v -> {
             Intent i = new Intent("XSF_ACTION_SEND_GUIDE");
-            i.putExtra("type", "turn"); 
+            i.putExtra("type", "turn");
             sendBroadcast(i);
         });
 
@@ -107,47 +107,38 @@ public class MainActivity extends Activity {
             i.putExtra("type", "cruise");
             sendBroadcast(i);
         });
-        
-        findViewById(R.id.btn_sys_save).setOnClickListener(v -> saveLogToDownload(tvLogSys.getText().toString(), "Sys_"));
+
+        findViewById(R.id.btn_sys_save).setOnClickListener(v -> saveToDownload(tvLogSys.getText().toString(), "Sys_"));
         findViewById(R.id.btn_sys_clear).setOnClickListener(v -> tvLogSys.setText(""));
     }
 
-    @Override protected void onResume() { super.onResume(); refreshStatus(); }
-
     private void refreshStatus() {
         boolean active = isModuleActive();
-        tvLspStatus.setText("LSPosed: " + (active ? "已激活 ✅" : "未激活 ❌"));
+        tvLspStatus.setText(active ? "LSPosed: 已激活 ✅" : "LSPosed: 未激活 ❌");
         tvLspStatus.setTextColor(active ? Color.GREEN : Color.RED);
     }
-    
-    private void updateHookStatus(boolean success) {
-        tvHookStatus.setText("Hook服务: 已连接 ✅");
-        tvHookStatus.setTextColor(Color.GREEN);
-    }
 
-    private void saveLogToDownload(String content, String prefix) {
-        if (content == null || content.isEmpty()) return;
+    private void saveToDownload(String content, String prefix) {
+        if (content.isEmpty()) return;
         try {
-            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            String fileName = prefix + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
-            File file = new File(downloadDir, fileName);
+            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            String name = prefix + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
+            File file = new File(dir, name);
             FileOutputStream fos = new FileOutputStream(file);
             fos.write(content.getBytes());
             fos.close();
-            Toast.makeText(this, "保存成功: " + fileName, Toast.LENGTH_SHORT).show();
-        } catch (Exception e) { Toast.makeText(this, "失败: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
+            Toast.makeText(this, "已存至Download: " + name, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) { Toast.makeText(this, "保存失败", Toast.LENGTH_SHORT).show(); }
     }
 
     private void checkPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE}, 100);
+                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 100);
             }
         }
     }
 
-    @Override protected void onDestroy() { 
-        super.onDestroy(); 
-        try { unregisterReceiver(logReceiver); } catch (Exception e) {} 
-    }
+    @Override protected void onResume() { super.onResume(); refreshStatus(); }
+    @Override protected void onDestroy() { super.onDestroy(); try { unregisterReceiver(logReceiver); } catch (Exception e) {} }
 }
