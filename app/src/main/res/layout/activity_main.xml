@@ -8,84 +8,95 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="5dp">
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="#222222">
 
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/tv_lsp_status"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
-            
-            <Button
-                android:id="@+id/btn_sniff"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="2"
-                android:text="📡 开启抓包 (关)"
-                android:backgroundTint="#673AB7"
-                android:layout_marginEnd="5dp"/>
-            
-            <Button
-                android:id="@+id/btn_clear"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="1"
-                android:text="🗑️ 清空"
-                android:backgroundTint="#555555"/>
-        </LinearLayout>
+            android:layout_weight="1"
+            android:text="LSPosed: 未激活 ❌"
+            android:textColor="#FF0000"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:gravity="center"/>
 
-        <LinearLayout
-            android:layout_width="match_parent"
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#555555"/>
+
+        <TextView
+            android:id="@+id/tv_hook_status"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="5dp">
-
-            <Button
-                android:id="@+id/btn_activate"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="1"
-                android:text="🚀 激活仪表"
-                android:backgroundTint="#009688"
-                android:layout_marginEnd="5dp"/>
-
-            <Button
-                android:id="@+id/btn_guide"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="1"
-                android:text="🚗 模拟路口"
-                android:backgroundTint="#FF9800"/>
-        </LinearLayout>
+            android:layout_weight="1"
+            android:text="Hook服务: 未连接 ❌"
+            android:textColor="#FF0000"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:gravity="center"/>
     </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:padding="2dp">
+        android:padding="5dp">
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
-            android:background="#111111"
-            android:layout_marginEnd="1dp">
-            
+            android:layout_marginEnd="3dp"
+            android:background="#1A1A1A">
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="=== 📡 高德抓包 ==="
+                android:text="📡 高德监听区"
                 android:textColor="#00FF00"
                 android:gravity="center"
                 android:padding="5dp"
                 android:textStyle="bold"/>
-                
+
+            <Button
+                android:id="@+id/btn_sniff_toggle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="🔴 开启抓包 (关)"
+                android:backgroundTint="#673AB7"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/btn_sniff_save"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="💾 保存"
+                    android:backgroundTint="#555555"
+                    android:layout_marginEnd="2dp"/>
+                <Button
+                    android:id="@+id/btn_sniff_clear"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🗑️ 清空"
+                    android:backgroundTint="#555555"/>
+            </LinearLayout>
+
             <ScrollView
                 android:id="@+id/scroll_sniff"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent">
+                android:layout_height="match_parent"
+                android:layout_marginTop="5dp"
+                android:background="#000000">
                 <TextView
                     android:id="@+id/tv_log_sniff"
                     android:layout_width="match_parent"
@@ -97,32 +108,78 @@
             </ScrollView>
         </LinearLayout>
 
-        <View
-            android:layout_width="1dp"
-            android:layout_height="match_parent"
-            android:background="#FFFFFF"/>
-
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
-            android:background="#111111"
-            android:layout_marginStart="1dp">
+            android:layout_marginStart="3dp"
+            android:background="#1A1A1A">
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="=== 🛠️ 模块日志 ==="
+                android:text="🛠️ 指令发送区"
                 android:textColor="#FFFF00"
                 android:gravity="center"
                 android:padding="5dp"
                 android:textStyle="bold"/>
 
+            <Button
+                android:id="@+id/btn_activate"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="🚀 激活仪表 (1->27)"
+                android:backgroundTint="#009688"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/btn_guide"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🚗 路口"
+                    android:backgroundTint="#FF9800"
+                    android:layout_marginEnd="2dp"/>
+                <Button
+                    android:id="@+id/btn_cruise"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🛳️ 巡航"
+                    android:backgroundTint="#FF5722"/>
+            </LinearLayout>
+            
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                 <Button
+                    android:id="@+id/btn_sys_save"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="💾 保存"
+                    android:backgroundTint="#555555"
+                    android:layout_marginEnd="2dp"/>
+                <Button
+                    android:id="@+id/btn_sys_clear"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🗑️ 清空"
+                    android:backgroundTint="#555555"/>
+             </LinearLayout>
+
             <ScrollView
                 android:id="@+id/scroll_sys"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent">
+                android:layout_height="match_parent"
+                android:layout_marginTop="5dp"
+                android:background="#000000">
                 <TextView
                     android:id="@+id/tv_log_sys"
                     android:layout_width="match_parent"
