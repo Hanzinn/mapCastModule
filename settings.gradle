@@ -1,6 +1,6 @@
 pluginManagement {
     repositories {
-        google()   // <--- 必须有这个，报错就是因为缺了这个
+        google()
         mavenCentral()
         gradlePluginPortal()
     }
@@ -10,6 +10,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // ✅ 必须加上这行，Gradle 才能找到 Xposed API
+        maven { url 'https://api.xposed.info/' }
     }
 }
 rootProject.name = "GaoDe-Helper"
