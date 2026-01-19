@@ -24,11 +24,12 @@ public class MainHook implements IXposedHookLoadPackage {
     public static final String ACTION_PING = "com.xsf.amaphelper.PING";
     public static final String ACTION_PONG = "com.xsf.amaphelper.PONG";
 
-    // ✅ 验证无误的类名
+    // ⬇️ 类名配置 (已验证正确)
     private static final String CLS_BUS = "ecarx.naviservice.d.e";
     private static final String CLS_WRAPPER = "ecarx.naviservice.map.bz";
     private static final String CLS_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
-    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
+    // 状态类 j (已验证正确)
+    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.j";
     
     private static final String ACTION_AMAP_STANDARD = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
@@ -47,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 Application app = (Application) param.thisObject;
                 Context context = app.getApplicationContext();
                 if (context != null) {
-                    logProxy(context, "✅ Hook 注入成功! PID=" + android.os.Process.myPid());
+                    logProxy(context, "✅ Hook 注入成功! (适配 Status 27 版)");
                     registerCombinedReceiver(context, lpparam.classLoader);
                 }
             }
@@ -79,7 +80,7 @@ public class MainHook implements IXposedHookLoadPackage {
         filter.addAction("XSF_ACTION_SEND_STATUS");
         filter.addAction(ACTION_PING);
         context.registerReceiver(receiver, filter);
-        logProxy(context, "监听就绪 (增强填充版)...");
+        logProxy(context, "监听就绪...");
     }
 
     private void handleAmapStandardBroadcast(Intent intent, ClassLoader cl, Context ctx) {
@@ -89,7 +90,8 @@ public class MainHook implements IXposedHookLoadPackage {
             if (keyType == 0) keyType = intent.getIntExtra("EXTRA_TYPE", 0);
 
             if (keyType == 10001) {
-                sendStatusToBus(cl, 13, ctx); 
+                // 收到导航信息时，确保状态是 27 (导航中)
+                sendStatusToBus(cl, 27, ctx); 
                 String cur = getString(intent, "CUR_ROAD_NAME", "cur_road_name");
                 String next = getString(intent, "NEXT_ROAD_NAME", "next_road_name");
                 int icon = getInt(intent, "ICON", "icon");
@@ -100,12 +102,13 @@ public class MainHook implements IXposedHookLoadPackage {
                 sendGuideToBus(cl, cur, next, icon, dist, tDist, tTime, ctx);
             } else if (keyType == 10019) {
                 int state = getInt(intent, "EXTRA_STATE", "extra_state");
-                // 强制显示地图 (State 0=空闲, 2=巡航)
+                // 强制显示地图 (2=Navi, 0=Idle) -> 对应车机 Status 27
                 if (state == 2 || state == 0) { 
-                    sendStatusToBus(cl, 13, ctx); 
+                    sendStatusToBus(cl, 27, ctx); 
                     sendGuideToBus(cl, "地图已连接", "巡航模式", 1, 0, 0, 0, ctx);
                 } else if (state == 9 || state == 1) {
-                    sendStatusToBus(cl, 29, ctx); 
+                    // 退出 -> 对应车机 Status 26 (Idle) 或 29 (Stop)
+                    sendStatusToBus(cl, 26, ctx); 
                 }
             }
         } catch (Throwable t) { logProxy(ctx, "LogicErr: " + t.getMessage()); }
@@ -124,21 +127,19 @@ public class MainHook implements IXposedHookLoadPackage {
     private int getInt(Intent i, String k1, String k2) { return (i.getIntExtra(k1, -1) != -1) ? i.getIntExtra(k1, -1) : i.getIntExtra(k2, 0); }
 
     // =======================================================
-    // 🔴 增强版发送逻辑 🔴
+    // 🔴 状态发送逻辑 🔴
     // =======================================================
     
     private void sendStatusToBus(ClassLoader cl, int status, Context ctx) {
         try {
             Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
-            Class<?> statusClass = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
             
-            // 修正：尝试使用参数 2 (部分车型要求)
-            Object statusObj = null;
-            try { statusObj = XposedHelpers.newInstance(statusClass, 2); }
-            catch (Throwable t) { statusObj = XposedHelpers.newInstance(statusClass); }
+            // 状态类 j
+            Class<?> statusClass = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
+            Object statusObj = XposedHelpers.newInstance(statusClass);
 
-            // 智能赋值
+            // 智能赋值 (找 int 字段)
             Field field = XposedHelpers.findFirstFieldByExactType(statusClass, int.class);
             if (field != null) {
                 field.setAccessible(true);
@@ -149,8 +150,7 @@ public class MainHook implements IXposedHookLoadPackage {
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d2, statusObj); 
             XposedHelpers.callMethod(busInstance, "a", msg);
             
-            // 成功日志
-            logProxy(ctx, "✅ 状态发送成功! (Status=" + status + ")");
+            // logProxy(ctx, "✅ 状态发送: " + status); // 减少刷屏
         } catch (Throwable t) { 
             logProxy(ctx, "Status Error: " + t.toString()); 
         }
@@ -162,12 +162,12 @@ public class MainHook implements IXposedHookLoadPackage {
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             Class<?> guideClass = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
             
-            // 修正：尝试使用参数 2
+            // 构造函数尝试
             Object guideInfo = null;
             try { guideInfo = XposedHelpers.newInstance(guideClass, 2); }
             catch (Throwable t) { guideInfo = XposedHelpers.newInstance(guideClass); }
 
-            // 1. 设置基础信息 (通过变量名)
+            // 赋值
             XposedHelpers.setObjectField(guideInfo, "curRoadName", cur);
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", next);
             XposedHelpers.setIntField(guideInfo, "turnId", icon); 
@@ -175,32 +175,49 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "remainDistance", totalDist);
             XposedHelpers.setIntField(guideInfo, "remainTime", totalTime);
             
-            // 2. 🔴 填充额外字段 (防止数据被认为是空的而被丢弃)
-            // 这些字段在 MapGuideInfo 里都有，如果不填可能是默认值 -1
-            trySetInt(guideInfo, "guideType", 0); // 0=GPS, 1=Simulate
-            trySetInt(guideInfo, "roadType", 1);  // 1=普通道路
-            trySetInt(guideInfo, "cameraDistance", 0);
+            // 填充防空字段
+            trySetInt(guideInfo, "guideType", 0);
+            trySetInt(guideInfo, "roadType", 1);
             
             Class<?> wrapperClass = XposedHelpers.findClass(CLS_WRAPPER, cl);
             Object msg = XposedHelpers.newInstance(wrapperClass, 0x7d0, guideInfo); 
             XposedHelpers.callMethod(busInstance, "a", msg);
-            
-            // 增加成功日志
-            logProxy(ctx, "✅ 路口信息已发送 (" + cur + " -> " + next + ")");
         } catch (Throwable t) { 
             logProxy(ctx, "Guide Error: " + t.toString()); 
         }
     }
     
-    // 辅助方法：尝试设置int字段，不存在则忽略
-    private void trySetInt(Object obj, String fieldName, int val) {
-        try { XposedHelpers.setIntField(obj, fieldName, val); } catch (Throwable t) {}
-    }
+    private void trySetInt(Object obj, String fieldName, int val) { try { XposedHelpers.setIntField(obj, fieldName, val); } catch (Throwable t) {} }
     
+    // --- 手动测试响应 ---
     private void handleAdbGuide(Intent intent, ClassLoader cl, Context ctx) {
         String cur = intent.getStringExtra("curRoad");
-        if ("cruise_test".equals(cur)) { sendStatusToBus(cl, 13, ctx); sendGuideToBus(cl, "当前道路", "巡航中", 1, 1, 1, 60, ctx); return; }
+        
+        // 如果是点击了“模拟巡航”按钮
+        if ("cruise_test".equals(cur)) { 
+            // 🔴 组合拳唤醒: 先发 1 (开始), 再发 27 (导航中)
+            sendStatusToBus(cl, 1, ctx);
+            try { Thread.sleep(200); } catch (InterruptedException e) {}
+            sendStatusToBus(cl, 27, ctx);
+            
+            sendGuideToBus(cl, "当前道路", "巡航中", 1, 1, 1, 60, ctx);
+            logProxy(ctx, "🚀 已发送唤醒序列 (1 -> 27)");
+            return;
+        }
+        
         sendGuideToBus(cl, cur, intent.getStringExtra("nextRoad"), intent.getIntExtra("icon", 1), intent.getIntExtra("distance", 0), 0, 0, ctx);
     }
-    private void handleAdbStatus(Intent intent, ClassLoader cl, Context ctx) { sendStatusToBus(cl, intent.getIntExtra("status", 0), ctx); }
+    
+    private void handleAdbStatus(Intent intent, ClassLoader cl, Context ctx) { 
+        int status = intent.getIntExtra("status", 0);
+        // 如果点的是“激活导航”按钮 (默认发13)，我们拦截它，改发唤醒序列
+        if (status == 13) {
+            sendStatusToBus(cl, 1, ctx); // 先 Start
+            try { Thread.sleep(200); } catch (InterruptedException e) {}
+            sendStatusToBus(cl, 27, ctx); // 再 Navigating
+            logProxy(ctx, "🚀 拦截激活指令，改发: Status 1 -> 27");
+        } else {
+            sendStatusToBus(cl, status, ctx); 
+        }
+    }
 }
