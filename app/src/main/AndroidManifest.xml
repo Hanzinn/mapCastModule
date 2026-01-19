@@ -6,12 +6,12 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="高德投屏助手"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MapCastModule"
-        android:requestLegacyExternalStorage="true"> <activity android:name=".MainActivity"
+        android:theme="@android:style/Theme.Black.NoTitleBar"
+        android:requestLegacyExternalStorage="true">
+        
+        <activity android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
