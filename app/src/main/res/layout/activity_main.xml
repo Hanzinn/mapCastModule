@@ -9,76 +9,22 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
         android:background="#222222"
         android:padding="8dp">
-        <TextView
-            android:id="@+id/tv_lsp_status"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="LSPosed: 检查中"
-            android:textColor="#FFFFFF"
-            android:gravity="center"
-            android:textSize="12sp"/>
-        <TextView
-            android:id="@+id/tv_hook_status"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="服务: 未连接"
-            android:textColor="#FFFFFF"
-            android:gravity="center"
-            android:textSize="12sp"/>
+        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP: 检查中" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp"/>
+        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务: 未连接" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp"/>
     </LinearLayout>
 
-    <Button
-        android:id="@+id/btn_super_test"
-        android:layout_width="match_parent"
-        android:layout_height="70dp"
-        android:text="🔥 开启全量轰炸测试 (直到反应为止)"
-        android:layout_marginTop="15dp"
-        android:backgroundTint="#D32F2F"
-        android:textStyle="bold"/>
+    <Button android:id="@+id/btn_super_activate" android:layout_width="match_parent" android:layout_height="70dp" android:text="🔥 核心激活轰炸 (13->25->27)" android:backgroundTint="#D32F2F" android:layout_marginTop="10dp" android:textStyle="bold"/>
 
-    <Button
-        android:id="@+id/btn_guide_test"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="🚗 模拟路口数据"
-        android:layout_marginTop="10dp"
-        android:backgroundTint="#FF9800"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="5dp">
+        <Button android:id="@+id/btn_guide" android:layout_width="0dp" android:layout_height="60dp" android:layout_weight="1" android:text="🚗 路口模拟" android:backgroundTint="#FF9800" android:layout_marginEnd="2dp"/>
+        <Button android:id="@+id/btn_cruise" android:layout_width="0dp" android:layout_height="60dp" android:layout_weight="1" android:text="🛳️ 巡航模拟" android:backgroundTint="#FF5722"/>
+    </LinearLayout>
 
-    <Button
-        android:id="@+id/btn_clear_log"
-        android:layout_width="match_parent"
-        android:layout_height="40dp"
-        android:text="🗑️ 清空日志"
-        android:layout_marginTop="10dp"
-        android:backgroundTint="#555555"/>
+    <Button android:id="@+id/btn_save_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="💾 保存日志 (Download)" android:backgroundTint="#444444" android:layout_marginTop="5dp"/>
 
-    <Button
-        android:id="@+id/btn_save_log"
-        android:layout_width="match_parent"
-        android:layout_height="40dp"
-        android:text="💾 保存日志 (Download)"
-        android:layout_marginTop="5dp"
-        android:backgroundTint="#444444"/>
-
-    <ScrollView
-        android:id="@+id/scrollView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginTop="10dp"
-        android:background="#111111">
-        <TextView
-            android:id="@+id/tv_log"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textColor="#00FF00"
-            android:padding="8dp"
-            android:textSize="11sp"
-            android:fontFamily="monospace"
-            android:text="--- 等待测试指令 ---\n"/>
+    <ScrollView android:id="@+id/scrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="10dp" android:background="#111111">
+        <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 等待操作 ---\n"/>
     </ScrollView>
 </LinearLayout>
