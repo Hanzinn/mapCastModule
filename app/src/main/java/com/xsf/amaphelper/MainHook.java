@@ -21,7 +21,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_XSF = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // --- 混淆类名 (V20验证有效) ---
+    // --- 类名定义 ---
     private static final String CLS_PROTOCOL_FACTORY = "j"; 
     private static final String CLS_PROTOCOL_MGR = "g"; 
     private static final String CLS_WIDGET_MGR_HOLDER = "q"; 
@@ -29,15 +29,12 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLS_WIDGET_CONNECTION = "o";
     private static final String CLS_VERSION_UTIL = "y"; 
     
-    // --- 完整包名 ---
     private static final String CLS_SERVICE = "ecarx.naviservice.service.NaviService";
     private static final String CLS_CONNECTION_B = "ecarx.naviservice.b"; 
     private static final String CLS_NEUSOFT_SDK = "ecarx.naviservice.map.d.a"; 
 
     private static Context mServiceContext = null;
     private static boolean isIpcConnected = false;
-    
-    // 💓 心跳控制开关
     private static boolean isHeartbeatRunning = false;
 
     @Override
@@ -53,18 +50,35 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context appCtx = (Context) param.thisObject;
-                sendAppLog(appCtx, "STATUS_HOOK_READY (V25-Heartbeat)");
+                sendAppLog(appCtx, "STATUS_HOOK_READY (V27-AutoResume)");
                 registerReceiver(appCtx, lpparam.classLoader);
             }
         });
 
-        // 2. 捕获 Service Context (确保重启后能拿到)
+        // 2. 捕获 Service Context (双重保险)
         try {
+            // 保险 A: onCreate
             XposedHelpers.findAndHookMethod(CLS_SERVICE, lpparam.classLoader, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     mServiceContext = (Context) param.thisObject;
                     sendAppLog(mServiceContext, "STATUS_SERVICE_RUNNING");
+                }
+            });
+
+            // 🚑 保险 B: onStartCommand (修复重启后灯灭的问题)
+            XposedHelpers.findAndHookMethod(CLS_SERVICE, lpparam.classLoader, "onStartCommand", Intent.class, int.class, int.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    mServiceContext = (Context) param.thisObject;
+                    sendAppLog(mServiceContext, "STATUS_SERVICE_RUNNING (Resumed)");
+                    
+                    // 🌟 自动续航逻辑
+                    if (!isHeartbeatRunning) {
+                        sendAppLog(mServiceContext, "💓 检测到服务重启，自动恢复心跳");
+                        // 自动触发激活连招 (Status 13)
+                        handleStatusAction(lpparam.classLoader, mServiceContext, 13);
+                    }
                 }
             });
         } catch (Throwable t) {}
@@ -109,7 +123,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         startOfficialService(ctx, cl);
                     } 
                     else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
-                        resurrectAndConnect(cl, ctx);
+                        keepAliveAndGreen(cl, ctx);
                     }
                     else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                         handleStatusAction(cl, ctx, intent.getIntExtra("status", 0));
@@ -124,8 +138,8 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🚑 核心功能 1: Matrix 伪造连接 (点亮绿灯)
-    private void resurrectAndConnect(ClassLoader cl, Context ctx) {
+    // 🚑 物理层: Matrix Lite (维持绿灯)
+    private void keepAliveAndGreen(ClassLoader cl, Context ctx) {
         try {
             Context targetCtx = (mServiceContext != null) ? mServiceContext : ctx;
             Class<?> holderClass = XposedHelpers.findClass(CLS_WIDGET_MGR_HOLDER, cl);
@@ -137,8 +151,6 @@ public class MainHook implements IXposedHookLoadPackage {
             }
 
             if (mgrInstance != null) {
-                try { XposedHelpers.callMethod(mgrInstance, "a", targetCtx); } catch (Throwable t) {}
-                // 伪造 Binder
                 try {
                     Object conn = XposedHelpers.getObjectField(mgrInstance, "i");
                     if (conn != null) {
@@ -154,7 +166,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 🚑 核心功能 2: 焦点抢占 (必须有)
+    // 🚑 焦点层
     private void grabNaviFocus(Context ctx) {
         try {
             Context target = (mServiceContext != null) ? mServiceContext : ctx;
@@ -165,12 +177,10 @@ public class MainHook implements IXposedHookLoadPackage {
             Intent i2 = new Intent("com.ecarx.intent.action.NAVI_FOCUS_GAIN");
             i2.putExtra("packageName", "com.autonavi.amapauto");
             target.sendBroadcast(i2);
-            
-            sendAppLog(ctx, "📡 焦点广播已发");
         } catch (Throwable t) {}
     }
 
-    // 🚑 核心功能 3: JSON 注入
+    // 🚑 协议层: JSON 注入
     private void injectAmapJson(ClassLoader cl, int protocolId, String dataJson, Context ctx) {
         try {
             Class<?> factoryClass = XposedHelpers.findClass(CLS_PROTOCOL_FACTORY, cl);
@@ -182,71 +192,82 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 💓 V25 核心：心跳引擎 (The Heartbeat)
-    private void startHeartbeat(ClassLoader cl, Context ctx) {
-        if (isHeartbeatRunning) return; // 防止重复启动
+    // 🛡️ 切换源穷举
+    private void sendMapSwitchingSpecific(ClassLoader cl, int from, int to, Context ctx) {
+        try {
+            String switchJson = "{\"fromVendor\":" + from + ",\"toVendor\":" + to + "}";
+            injectAmapJson(cl, 2007, switchJson, ctx);
+            sendAppLog(ctx, "🔄 强切: " + from + " -> " + to);
+        } catch (Throwable t) {}
+    }
+
+    // 💓 V27 自动续航心跳
+    private void startV27Heartbeat(ClassLoader cl, Context ctx) {
+        if (isHeartbeatRunning) return;
         isHeartbeatRunning = true;
         
         new Thread(() -> {
-            sendAppLog(ctx, "💓 心跳引擎已启动 (每2秒刷新)");
-            
+            sendAppLog(ctx, "💓 V27 自动续航心跳已启动...");
             int count = 0;
-            // 只要 IPC 还是绿的 (或者我们强制认为它是绿的)，就一直跳
-            // 限制 60 次 (2分钟)，防止无限后台耗电，用户可以再次点击激活续命
-            while (isHeartbeatRunning && count < 60) {
+            // 只要 IPC 绿灯亮着，就一直跳
+            // 这里移除了 count < 60 的限制，只要 App 活着就一直维持
+            while (isHeartbeatRunning) { 
                 try {
-                    // 1. 刷状态：导航中 + Vendor 4
-                    String heartJson = "{\"autoStatus\":13,\"eventMapVendor\":4,\"naviState\":1}";
-                    injectAmapJson(cl, 3027, heartJson, ctx);
+                    // 1. 最完整的状态包
+                    String fullStatusJson = "{" +
+                            "\"autoStatus\":13," +
+                            "\"eventMapVendor\":4," +
+                            "\"naviState\":1," +
+                            "\"isWholeWorld\":false," +
+                            "\"mapStatus\":0" +
+                            "}";
+                    injectAmapJson(cl, 3027, fullStatusJson, ctx);
                     
-                    // 2. 刷引导：维持画面
-                    String miniGuide = "{\"turnId\":1,\"roadName\":\"V25心跳维持\",\"distance\":999,\"icon\":1}";
-                    injectAmapJson(cl, 101, miniGuide, ctx);
+                    // 2. 引导包 (动态变化一点点距离，防止被去重)
+                    String guideJson = "{\"turnId\":2,\"roadName\":\"V27自动续航\",\"distance\":" + (500 + count%10) + ",\"icon\":1}";
+                    injectAmapJson(cl, 101, guideJson, ctx);
                     
-                    // 3. 补发广播：防止被系统 Kill
-                    if (count % 5 == 0) { // 每10秒补一次焦点
-                        grabNaviFocus(ctx);
-                    }
+                    // 3. 焦点补发 (每10秒)
+                    if (count % 5 == 0) grabNaviFocus(ctx);
 
-                    Thread.sleep(2000); 
+                    Thread.sleep(2000);
                     count++;
-                } catch (Exception e) { 
-                    isHeartbeatRunning = false;
-                    break; 
-                }
+                } catch (Exception e) { break; }
             }
             isHeartbeatRunning = false;
-            sendAppLog(ctx, "💔 心跳引擎已停止 (超时或中断)");
+            sendAppLog(ctx, "💔 心跳停止");
         }).start();
     }
 
     private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
         new Thread(()->{
             if (status == 13) {
-                // 1. 基础连接 & 焦点
-                resurrectAndConnect(cl, ctx);
+                // 1. 物理层 & 焦点
+                keepAliveAndGreen(cl, ctx); 
                 grabNaviFocus(ctx);
                 try{Thread.sleep(500);}catch(Exception e){}
-                
-                sendAppLog(ctx, ">>> 启动 V25 持续激活 <<<");
 
-                // 2. 启动指令
+                sendAppLog(ctx, ">>> 启动 V27 终极激活 <<<");
+
+                // 2. 注入启动指令 (ID 7)
                 injectAmapJson(cl, 7, "{}", ctx);
                 try{Thread.sleep(300);}catch(Exception e){}
                 
-                // 3. 启动心跳引擎 (关键差异！)
-                startHeartbeat(cl, ctx);
+                // 3. 🛡️ 切换源穷举
+                int[] froms = {0, 1, 4};
+                for (int f : froms) {
+                    sendMapSwitchingSpecific(cl, f, 4, ctx);
+                    try{Thread.sleep(200);}catch(Exception e){}
+                }
+
+                // 4. 💓 启动心跳
+                startV27Heartbeat(cl, ctx);
                 
-                // 4. 发送首帧强力数据
-                String fullGuide = "{\"turnId\":2,\"roadName\":\"V25激活成功\",\"distance\":500,\"nextRoadName\":\"向前冲\",\"cameraDist\":0,\"icon\":1}";
-                injectAmapJson(cl, 101, fullGuide, ctx);
+                sendAppLog(ctx, "✅ 激活指令已全量注入");
                 
-                sendAppLog(ctx, "✅ 激活指令已发，心跳维持中...");
-                
-            } else if (status == 29) { // 停止
-                isHeartbeatRunning = false; // 杀掉心跳
+            } else if (status == 29) {
+                isHeartbeatRunning = false;
                 injectAmapJson(cl, 3027, "{\"autoStatus\":29,\"eventMapVendor\":4,\"naviState\":0}", ctx);
-                sendAppLog(ctx, "⏹️ 导航结束，心跳停止");
             }
         }).start();
     }
@@ -259,15 +280,16 @@ public class MainHook implements IXposedHookLoadPackage {
             intent.addCategory("ecarx.intent.category.NAVI_INNER");
             ctx.startService(intent);
             
+            // 延时检测，如果服务没自己亮，就帮它亮
             new Thread(()->{
                 try {
                     Thread.sleep(3000);
-                    // 自动帮用户执行 B 计划
-                    resurrectAndConnect(cl, ctx);
+                    // 确保物理连接
+                    keepAliveAndGreen(cl, ctx);
                 } catch (Exception e) {}
             }).start();
 
-            sendAppLog(ctx, "冷启动序列(V25)已触发");
+            sendAppLog(ctx, "冷启动序列(V27)已触发");
         } catch (Exception e) { sendAppLog(ctx, "启动失败"); }
     }
 
