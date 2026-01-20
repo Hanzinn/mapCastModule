@@ -26,9 +26,9 @@ public class MainActivity extends Activity {
         public void onReceive(Context ctx, Intent intent) {
             String log = intent.getStringExtra("log");
             if (log == null) return;
-            if (log.contains("HOOK_READY")) { tvHook.setText("注入: ✅"); tvHook.setTextColor(Color.GREEN); }
-            else if (log.contains("SERVICE_RUNNING")) { tvSvc.setText("服务: ✅"); tvSvc.setTextColor(Color.GREEN); }
-            else { appendLog(log); }
+            if (log.contains("STATUS_HOOK_READY")) { tvHook.setText("注入: ✅"); tvHook.setTextColor(Color.GREEN); }
+            else if (log.contains("STATUS_SERVICE_RUNNING")) { tvSvc.setText("服务: ✅"); tvSvc.setTextColor(Color.GREEN); }
+            else { appendLog("模块: " + log); }
         }
     };
 
@@ -46,17 +46,32 @@ public class MainActivity extends Activity {
 
         registerReceiver(receiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
-        findViewById(R.id.btn_start_service).setOnClickListener(v -> sendBroadcast(new Intent("XSF_ACTION_START_SERVICE")));
-        findViewById(R.id.btn_activate).setOnClickListener(v -> sendStatus(13));
-        findViewById(R.id.btn_start_cruise).setOnClickListener(v -> sendStatus(28));
-        findViewById(R.id.btn_stop_cruise).setOnClickListener(v -> sendStatus(29));
-    }
+        // 🟢 检查点：确保 findViewById 的 ID 与 XML 完全一致
+        findViewById(R.id.btn_start_service).setOnClickListener(v -> {
+            appendLog("手动操作: 点击冷启动服务"); // 先写日志 
+            sendBroadcast(new Intent("XSF_ACTION_START_SERVICE"));
+        });
 
-    private void sendStatus(int s) {
-        Intent i = new Intent("XSF_ACTION_SEND_STATUS");
-        i.putExtra("status", s);
-        sendBroadcast(i);
-        appendLog("手动发送 Status: " + s);
+        findViewById(R.id.btn_activate).setOnClickListener(v -> {
+            appendLog("手动操作: 点击激活仪表");
+            Intent i = new Intent("XSF_ACTION_SEND_STATUS");
+            i.putExtra("status", 13);
+            sendBroadcast(i);
+        });
+
+        findViewById(R.id.btn_start_cruise).setOnClickListener(v -> {
+            appendLog("手动操作: 点击开启巡航");
+            Intent i = new Intent("XSF_ACTION_SEND_STATUS");
+            i.putExtra("status", 28);
+            sendBroadcast(i);
+        });
+
+        findViewById(R.id.btn_stop_cruise).setOnClickListener(v -> {
+            appendLog("手动操作: 点击停止巡航");
+            Intent i = new Intent("XSF_ACTION_SEND_STATUS");
+            i.putExtra("status", 29);
+            sendBroadcast(i);
+        });
     }
 
     private void appendLog(String m) {
