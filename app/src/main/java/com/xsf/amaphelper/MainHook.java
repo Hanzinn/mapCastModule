@@ -14,11 +14,10 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
-
     private static final String PKG_XSF = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // 类名保持不变
+    // 基于 Smali 的类名 [cite: 1, 2, 3]
     private static final String CLS_BUS = "ecarx.naviservice.d.e";
     private static final String CLS_WRAPPER = "ecarx.naviservice.map.bz"; 
     private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
@@ -28,24 +27,22 @@ public class MainHook implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (lpparam.packageName.equals(PKG_SELF)) {
-            XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, 
-                "isModuleActive", XC_MethodReplacement.returnConstant(true));
+            XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, "isModuleActive", XC_MethodReplacement.returnConstant(true));
             return;
         }
 
         if (!lpparam.packageName.equals(PKG_XSF)) return;
 
-        // 1. Hook Application
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context context = (Context) param.thisObject;
-                sendAppLog(context, "STATUS_HOOK_READY"); 
+                sendAppLog(context, "STATUS_HOOK_READY"); // 注入成功反馈
                 registerReceiver(context, lpparam.classLoader);
             }
         });
 
-        // 2. Hook Service 启动反馈
+        // 监听服务真实启动反馈 
         try {
             XposedHelpers.findAndHookMethod(CLS_SERVICE, lpparam.classLoader, "onStartCommand", Intent.class, int.class, int.class, new XC_MethodHook() {
                 @Override
@@ -62,34 +59,17 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             public void onReceive(Context ctx, Intent intent) {
                 String action = intent.getAction();
-                
                 if ("XSF_ACTION_START_SERVICE".equals(action)) {
                     startOfficialService(ctx);
-                } 
-                else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
+                } else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                     int status = intent.getIntExtra("status", 0);
-                    
+                    // 根据 d.b.smali，强制使用 Vendor 4 
                     if (status == 13) {
-                        // 常规激活：优先发 Vendor 4
-                        sendAppLog(ctx, "⚡ 激活测试 (Vendor 4)");
-                        sendStatus(cl, 13, ctx);
-                        new Thread(()->{
-                            try{Thread.sleep(300);}catch(Exception e){}
-                            sendStatus(cl, 25, ctx);
-                        }).start();
-                    } 
-                    else if (status == 28) {
-                        // 官方巡航：优先发 Vendor 4
-                        sendAppLog(ctx, "🚀 巡航测试 (Vendor 4)");
-                        sendStatus(cl, 28, ctx); 
-                        new Thread(()->{
-                            try{Thread.sleep(200);}catch(Exception e){}
-                            sendOfficialGuide(cl, ctx); 
-                        }).start();
-                    } 
-                    else {
-                        sendStatus(cl, status, ctx);
-                        if(status == 29) sendAppLog(ctx, "🛑 停止 (Vendor 4)");
+                        sendAppLog(ctx, "⚡ 启动序列: 13 -> 25 (Vendor 4)");
+                        sendData(cl, status, 4, ctx);
+                        new Thread(()->{ try{Thread.sleep(400);}catch(Exception e){} sendData(cl, 25, 4, ctx); }).start();
+                    } else {
+                        sendData(cl, status, 4, ctx);
                     }
                 }
             }
@@ -100,6 +80,21 @@ public class MainHook implements IXposedHookLoadPackage {
         context.registerReceiver(receiver, filter);
     }
 
+    private void sendData(ClassLoader cl, int statusValue, int vendor, Context ctx) {
+        try {
+            Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
+            Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
+            // 锁定构造参数为 4 
+            Object infoObj = XposedHelpers.newInstance(infoCls, vendor);
+            XposedHelpers.callMethod(infoObj, "setStatus", statusValue);
+            
+            Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            Object msg = XposedHelpers.newInstance(wrapCls, 0x7d2, infoObj); // 0x7d2 是状态消息
+            XposedHelpers.callMethod(bus, "a", msg);
+            sendAppLog(ctx, "已发送 Status " + statusValue + " (Vendor " + vendor + ")");
+        } catch (Exception e) { sendAppLog(ctx, "发送失败: " + e.getMessage()); }
+    }
+
     private void startOfficialService(Context ctx) {
         try {
             Intent intent = new Intent();
@@ -107,58 +102,8 @@ public class MainHook implements IXposedHookLoadPackage {
             intent.setAction("ecarx.intent.action.NAVI_SERVICE_STARTED");
             intent.addCategory("ecarx.intent.category.NAVI_INNER");
             ctx.startService(intent);
-            sendAppLog(ctx, "已发送启动广播...");
-        } catch (Exception e) {
-            sendAppLog(ctx, "启动失败: " + e.getMessage());
-        }
-    }
-
-    // 🔴 核心修改：优先使用 Vendor = 4
-    private void sendStatus(ClassLoader cl, int statusValue, Context ctx) {
-        try {
-            Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
-            Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-            
-            // 🔴 根据 d.b.smali 分析结果，Vendor ID 必须是 4
-            // 为了容错，我们发 4, 1, 2，但 4 排第一
-            int[] vendors = {4, 1, 2}; 
-            
-            for (int v : vendors) {
-                try {
-                    Object infoObj = XposedHelpers.newInstance(infoCls, v); // new MapStatusInfo(4)
-                    XposedHelpers.callMethod(infoObj, "setStatus", statusValue);
-                    
-                    Object msg = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WRAPPER, cl), 0x7d2, infoObj);
-                    XposedHelpers.callMethod(bus, "a", msg);
-                    
-                    if (v == 4) sendAppLog(ctx, "Status " + statusValue + " (Vendor 4) 已发送");
-                } catch (Throwable t) {}
-            }
-        } catch (Exception e) { sendAppLog(ctx, "Err: " + e.getMessage()); }
-    }
-
-    // 🔴 核心修改：路口信息也优先使用 Vendor = 4
-    private void sendOfficialGuide(ClassLoader cl, Context ctx) {
-        try {
-            Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
-            Class<?> guideCls = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
-            
-            int[] vendors = {4, 1, 2}; // 优先尝试 4
-            
-            for (int v : vendors) {
-                try {
-                    Object gObj = XposedHelpers.newInstance(guideCls, v); // new MapGuideInfo(4)
-                    XposedHelpers.callMethod(gObj, "setGuideType", 2);
-                    XposedHelpers.callMethod(gObj, "setTurnId", 0x66);
-                    XposedHelpers.callMethod(gObj, "setCurRoadName", "Vendor 4 测试");
-                    XposedHelpers.callMethod(gObj, "setNextRoadName", "成功在望");
-                    XposedHelpers.callMethod(gObj, "setNextTurnDistance", 500);
-                    
-                    Object msg = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WRAPPER, cl), 0x7d0, gObj);
-                    XposedHelpers.callMethod(bus, "a", msg);
-                } catch (Throwable t) {}
-            }
-        } catch (Exception e) {}
+            sendAppLog(ctx, "正在冷启动 NaviService...");
+        } catch (Exception e) { sendAppLog(ctx, "启动服务指令失败: " + e.getMessage()); }
     }
 
     private void sendAppLog(Context ctx, String log) {
