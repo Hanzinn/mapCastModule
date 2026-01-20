@@ -14,7 +14,6 @@ import android.view.Window;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import java.io.File;
 import java.io.FileOutputStream;
 import java.text.SimpleDateFormat;
@@ -55,26 +54,25 @@ public class MainActivity extends Activity {
 
         registerReceiver(logReceiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
-        // 按钮1：核心轰炸
-        findViewById(R.id.btn_super_activate).setOnClickListener(v -> {
-            logLocal("手动发送: 核心激活序列 (13->25->27)");
-            Intent i = new Intent("XSF_ACTION_SUPER_TEST");
+        // 按钮1：启动服务
+        findViewById(R.id.btn_start_service).setOnClickListener(v -> {
+            logLocal("正在请求启动 NaviService...");
+            sendBroadcast(new Intent("XSF_ACTION_START_SERVICE"));
+        });
+
+        // 按钮2：开启巡航
+        findViewById(R.id.btn_start_cruise).setOnClickListener(v -> {
+            logLocal("请求发送: 开启巡航 (Status 28)");
+            Intent i = new Intent("XSF_ACTION_SEND_STATUS");
+            i.putExtra("status", 28); // 0x1C
             sendBroadcast(i);
         });
 
-        // 按钮2：路口模拟
-        findViewById(R.id.btn_guide).setOnClickListener(v -> {
-            logLocal("手动发送: 模拟路口数据");
-            Intent i = new Intent("XSF_ACTION_SEND_GUIDE");
-            i.putExtra("type", "turn");
-            sendBroadcast(i);
-        });
-
-        // 按钮3：巡航模拟
-        findViewById(R.id.btn_cruise).setOnClickListener(v -> {
-            logLocal("手动发送: 模拟巡航数据");
-            Intent i = new Intent("XSF_ACTION_SEND_GUIDE");
-            i.putExtra("type", "cruise");
+        // 按钮3：停止巡航
+        findViewById(R.id.btn_stop_cruise).setOnClickListener(v -> {
+            logLocal("请求发送: 停止巡航 (Status 29)");
+            Intent i = new Intent("XSF_ACTION_SEND_STATUS");
+            i.putExtra("status", 29); // 0x1D
             sendBroadcast(i);
         });
 
@@ -95,7 +93,7 @@ public class MainActivity extends Activity {
     private void saveToDownload() {
         try {
             File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            String name = "XSF_FinalTest_" + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
+            String name = "XSF_OfficialFix_" + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
             File file = new File(path, name);
             FileOutputStream fos = new FileOutputStream(file);
             fos.write(tvLog.getText().toString().getBytes());
