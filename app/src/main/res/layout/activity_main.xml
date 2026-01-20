@@ -12,35 +12,42 @@
         android:background="#222222"
         android:padding="8dp">
         <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP: 检查中" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务: 未连接" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp"/>
+        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="目标服务: 未运行 ❌" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp" android:textStyle="bold"/>
     </LinearLayout>
 
     <Button 
         android:id="@+id/btn_start_service" 
         android:layout_width="match_parent" 
         android:layout_height="60dp" 
-        android:text="⚡ 步骤1：强制冷启动服务 (必须先点)" 
+        android:text="⚡ 步骤1：冷启动服务 (等待反馈变绿)" 
         android:backgroundTint="#0288D1" 
         android:layout_marginTop="15dp" 
         android:textStyle="bold"/>
 
     <Button 
-        android:id="@+id/btn_start_cruise" 
+        android:id="@+id/btn_activate" 
         android:layout_width="match_parent" 
-        android:layout_height="60dp" 
-        android:text="🛳️ 步骤2：开启巡航 (Status 28)" 
-        android:backgroundTint="#FF5722" 
+        android:layout_height="50dp" 
+        android:text="🚀 步骤2：尝试常规激活 (Status 13/25)" 
+        android:backgroundTint="#009688" 
         android:layout_marginTop="10dp"/>
 
     <Button 
-        android:id="@+id/btn_stop_cruise" 
+        android:id="@+id/btn_start_cruise" 
         android:layout_width="match_parent" 
         android:layout_height="50dp" 
-        android:text="🛑 停止巡航 (Status 29)" 
-        android:backgroundTint="#555555" 
-        android:layout_marginTop="10dp"/>
+        android:text="🛳️ 步骤3：尝试官方巡航 (Status 28)" 
+        android:backgroundTint="#FF5722" 
+        android:layout_marginTop="5dp"/>
 
-    <Button android:id="@+id/btn_save_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="💾 保存日志" android:backgroundTint="#444444" android:layout_marginTop="10dp"/>
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="5dp">
+        <Button android:id="@+id/btn_stop_cruise" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="停止 (29)" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
+        <Button android:id="@+id/btn_save_log" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="保存日志" android:backgroundTint="#444444"/>
+    </LinearLayout>
 
     <ScrollView android:id="@+id/scrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="10dp" android:background="#111111">
         <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 等待操作 ---\n"/>
