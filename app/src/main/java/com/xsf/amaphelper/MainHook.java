@@ -21,22 +21,16 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_XSF = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // --- 混淆类名 (Short Names - V20验证成功) ---
+    // --- 类名定义 ---
     private static final String CLS_PROTOCOL_FACTORY = "j"; 
     private static final String CLS_PROTOCOL_MGR = "g"; 
     private static final String CLS_WIDGET_MGR_HOLDER = "q"; 
     private static final String CLS_WIDGET_MGR = "l"; 
     private static final String CLS_WIDGET_CONNECTION = "o";
     private static final String CLS_VERSION_UTIL = "y"; 
-    
-    // --- 完整包名 ---
     private static final String CLS_SERVICE = "ecarx.naviservice.service.NaviService";
     private static final String CLS_CONNECTION_B = "ecarx.naviservice.b"; 
     private static final String CLS_NEUSOFT_SDK = "ecarx.naviservice.map.d.a"; 
-    // Java对象发送通道 (辅助)
-    private static final String CLS_BUS_FACTORY = "ecarx.naviservice.d.e"; 
-    private static final String CLS_WRAPPER = "ecarx.naviservice.map.bz"; 
-    private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
 
     private static Context mServiceContext = null;
     private static boolean isIpcConnected = false;
@@ -54,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context appCtx = (Context) param.thisObject;
-                sendAppLog(appCtx, "STATUS_HOOK_READY (V22-Focus)");
+                sendAppLog(appCtx, "STATUS_HOOK_READY (V24-Pressure)");
                 registerReceiver(appCtx, lpparam.classLoader);
             }
         });
@@ -70,7 +64,7 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
-        // 3. 生存补丁 (版本欺骗)
+        // 3. 生存补丁
         try {
             XposedHelpers.findAndHookMethod(CLS_VERSION_UTIL, lpparam.classLoader, "b", String.class, XC_MethodReplacement.returnConstant(70500));
         } catch (Throwable t) {}
@@ -81,9 +75,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Object inst = param.getResult();
-                    if (inst != null) {
-                        XposedHelpers.setBooleanField(inst, "c", true);
-                    }
+                    if (inst != null) XposedHelpers.setBooleanField(inst, "c", true);
                 }
             });
             XposedHelpers.findAndHookMethod(CLS_PROTOCOL_MGR, lpparam.classLoader, "f", XC_MethodReplacement.returnConstant(true));
@@ -94,8 +86,7 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 isIpcConnected = true;
-                String clsName = param.thisObject.getClass().getSimpleName();
-                sendAppLog(null, "STATUS_IPC_CONNECTED (" + clsName + ")"); 
+                sendAppLog(null, "STATUS_IPC_CONNECTED (Real)"); 
             }
         };
         try { XposedHelpers.findAndHookMethod(CLS_WIDGET_CONNECTION, lpparam.classLoader, "onServiceConnected", ComponentName.class, IBinder.class, ipcHook); } catch (Throwable t) {}
@@ -128,11 +119,10 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🚑 核心功能 1: 物理链路打通 (Matrix 注入 - 已验证有效)
+    // 🚑 Matrix 伪造连接 (保持绿灯)
     private void resurrectAndConnect(ClassLoader cl, Context ctx) {
         try {
             Context targetCtx = (mServiceContext != null) ? mServiceContext : ctx;
-            
             Class<?> holderClass = XposedHelpers.findClass(CLS_WIDGET_MGR_HOLDER, cl);
             Object mgrInstance = XposedHelpers.getStaticObjectField(holderClass, "a");
             
@@ -143,120 +133,113 @@ public class MainHook implements IXposedHookLoadPackage {
 
             if (mgrInstance != null) {
                 try { XposedHelpers.callMethod(mgrInstance, "a", targetCtx); } catch (Throwable t) {}
-                
-                // 伪造 Binder，点亮绿灯
                 try {
                     Object conn = XposedHelpers.getObjectField(mgrInstance, "i");
                     if (conn != null) {
                         ComponentName fakeName = new ComponentName("com.fake.pkg", "com.fake.cls");
                         IBinder fakeBinder = new Binder(); 
                         XposedHelpers.callMethod(conn, "onServiceConnected", fakeName, fakeBinder);
-                        sendAppLog(ctx, "⚡ IPC 绿灯点亮 (Matrix)");
+                        sendAppLog(ctx, "⚡ IPC 绿灯 (Matrix)");
                     }
                 } catch (Throwable t) {}
             }
         } catch (Throwable e) {
-            sendAppLog(ctx, "连接异常: " + e.getMessage());
+            sendAppLog(ctx, "Matrix Err: " + e.getMessage());
         }
     }
 
-    // 🚑 核心功能 2: 焦点抢占 (V22 新增)
+    // 🚑 焦点抢占 (V22逻辑)
     private void grabNaviFocus(Context ctx) {
         try {
             Context target = (mServiceContext != null) ? mServiceContext : ctx;
-            
-            // 广播1: 告诉系统导航状态改变 (Status Bar / Cluster)
             Intent i1 = new Intent("ecarx.intent.action.NAVI_STATE_CHANGE");
-            i1.putExtra("NAVI_STATE", 1); // 1 = 开始导航
+            i1.putExtra("NAVI_STATE", 1); 
             target.sendBroadcast(i1);
             
-            // 广播2: 声明高德获取焦点
             Intent i2 = new Intent("com.ecarx.intent.action.NAVI_FOCUS_GAIN");
             i2.putExtra("packageName", "com.autonavi.amapauto");
             target.sendBroadcast(i2);
             
-            // 广播3: 补充协议广播
-            Intent i3 = new Intent("ecarx.intent.action.NAVI_STARTED");
-            i3.putExtra("EXTRA_MAP_VENDOR", 4);
-            target.sendBroadcast(i3);
-
-            sendAppLog(ctx, "📡 焦点抢占广播已发送");
-        } catch (Throwable t) {
-            sendAppLog(ctx, "焦点抢占失败: " + t.getMessage());
-        }
+            sendAppLog(ctx, "📡 焦点广播已发");
+        } catch (Throwable t) {}
     }
 
-    // 🚑 核心功能 3: JSON 协议注入 (通过 j.a 获取 g)
+    // 🚑 JSON 注入
     private void injectAmapJson(ClassLoader cl, int protocolId, String dataJson, Context ctx) {
         try {
             Class<?> factoryClass = XposedHelpers.findClass(CLS_PROTOCOL_FACTORY, cl);
             Object gInst = XposedHelpers.callStaticMethod(factoryClass, "a");
-            
             if (gInst != null) {
                 String payload = "{\"messageType\":\"dispatch\",\"protocolId\":" + protocolId + ",\"data\":" + dataJson + "}";
                 XposedHelpers.callMethod(gInst, "a", payload);
-                sendAppLog(ctx, "💉 JSON ID=" + protocolId + " OK");
-            } else {
-                sendAppLog(ctx, "❌ 协议单例获取失败");
-            }
-        } catch (Throwable t) {
-            sendAppLog(ctx, "JSON Fail: " + t.getMessage());
-        }
-    }
-
-    // 辅助: Java 对象发送 (双重保障)
-    private void sendJavaObject(ClassLoader cl, int status, Context ctx) {
-        try {
-            Class<?> busClass = XposedHelpers.findClass(CLS_BUS_FACTORY, cl);
-            Object bus = XposedHelpers.callStaticMethod(busClass, "a");
-            if (bus != null) {
-                Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-                Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
-                Object infoObj = XposedHelpers.newInstance(infoCls, 4);
-                XposedHelpers.callMethod(infoObj, "setStatus", status);
-                Object msg = XposedHelpers.newInstance(wrapCls, 0x7d2, infoObj);
-                XposedHelpers.callMethod(bus, "a", msg);
+                // sendAppLog(ctx, "JSON " + protocolId + " OK");
             }
         } catch (Throwable t) {}
     }
 
+    // 🔥 V24 核心：时序压力测试逻辑
     private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
         new Thread(()->{
             if (status == 13) {
-                // 1. 确保物理链路
+                // 1. 基础连接
                 resurrectAndConnect(cl, ctx);
-                try{Thread.sleep(300);}catch(Exception e){}
                 
-                // 2. 抢占焦点 (V22)
+                // 2. 抢占焦点
                 grabNaviFocus(ctx);
-                try{Thread.sleep(300);}catch(Exception e){}
                 
-                sendAppLog(ctx, "执行 V22 深度激活...");
+                // ⏰ 延迟 800ms，让决策中心反应过来
+                try{Thread.sleep(800);}catch(Exception e){}
+                
+                sendAppLog(ctx, ">>> 开始 V24 压力测试 <<<");
 
-                // 3. 注入启动指令 (ID 7)
+                // 3. 注入 AppStart
                 injectAmapJson(cl, 7, "{}", ctx);
                 try{Thread.sleep(300);}catch(Exception e){}
+
+                // 4. 🚀 巡航预热 (Status 28)
+                // 尝试 Vendor 4 和 1
+                injectAmapJson(cl, 3027, "{\"autoStatus\":28,\"eventMapVendor\":4}", ctx);
+                try{Thread.sleep(200);}catch(Exception e){}
+                injectAmapJson(cl, 3027, "{\"autoStatus\":28,\"eventMapVendor\":1}", ctx);
                 
-                // 4. 注入状态指令 (ID 3027) - 增强版
-                // 加入 naviState: 1 (NAVI_STATE_STARTED)
-                String statusJson = "{\"autoStatus\":13,\"eventMapVendor\":4,\"naviState\":1}";
-                injectAmapJson(cl, 3027, statusJson, ctx);
-                try{Thread.sleep(400);}catch(Exception e){}
+                sendAppLog(ctx, "⏱️ 巡航预热中 (1s)...");
+                try{Thread.sleep(1000);}catch(Exception e){}
+
+                // 5. 🚀 导航开始 (参数穷举)
+                // 循环尝试 naviState 1, 2, 3
+                int[] states = {1, 2, 3};
+                // 循环尝试 vendor 4, 1
+                int[] vendors = {4, 1};
                 
-                // 5. 注入引导指令 (ID 101) - 增强版
-                // 加入 icon: 1, cameraDist: 0, 确保数据完整
-                String guideJson = "{\"turnId\":2,\"roadName\":\"V22焦点测试\",\"distance\":666,\"nextRoadName\":\"成功\",\"cameraDist\":0,\"icon\":1}";
-                injectAmapJson(cl, 101, guideJson, ctx);
+                for (int v : vendors) {
+                    for (int s : states) {
+                        String json = "{\"autoStatus\":13,\"eventMapVendor\":" + v + ",\"naviState\":" + s + "}";
+                        injectAmapJson(cl, 3027, json, ctx);
+                        // 快速连发间隔
+                        try{Thread.sleep(100);}catch(Exception e){}
+                    }
+                }
                 
-                // 6. 双保险：发送 Java 对象
-                sendJavaObject(cl, 13, ctx);
+                // 6. 🚀 引导信息轰炸 (数据丰满化)
+                // 补全所有可能需要的字段
+                String fullGuide = "{" +
+                        "\"turnId\":2," + 
+                        "\"roadName\":\"V24压力测试\"," +
+                        "\"distance\":500," +
+                        "\"nextRoadName\":\"成功\"," +
+                        "\"cameraDist\":0," +
+                        "\"icon\":1," +
+                        "\"routeRemainDist\":1000," +
+                        "\"routeRemainTime\":60" +
+                        "}";
                 
-                sendAppLog(ctx, "✅ 激活序列(V22)完成");
+                // 对所有 Vendor 进行引导信息注入
+                injectAmapJson(cl, 101, fullGuide, ctx); 
+                
+                sendAppLog(ctx, "✅ V24 压力测试序列完成");
                 
             } else if (status == 28) {
                 injectAmapJson(cl, 3027, "{\"autoStatus\":28,\"eventMapVendor\":4,\"naviState\":1}", ctx);
-            } else if (status == 29) {
-                injectAmapJson(cl, 3027, "{\"autoStatus\":29,\"eventMapVendor\":4,\"naviState\":0}", ctx);
             }
         }).start();
     }
@@ -278,7 +261,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Exception e) {}
             }).start();
 
-            sendAppLog(ctx, "冷启动序列(V22)已触发");
+            sendAppLog(ctx, "冷启动序列(V24)已触发");
         } catch (Exception e) { sendAppLog(ctx, "启动失败"); }
     }
 
