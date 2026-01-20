@@ -37,7 +37,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLS_WIDGET_MGR_HOLDER = "ecarx.naviservice.map.q"; 
     private static final String CLS_WIDGET_MGR = "ecarx.naviservice.map.l"; 
 
-    // 🌟 全局持有 Service Context
     private static Context mServiceContext = null;
     private static boolean isIpcConnected = false;
 
@@ -59,7 +58,7 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         });
 
-        // 2. 🌟 捕获 Service Context
+        // 2. Service Context 捕获
         try {
             XposedHelpers.findAndHookMethod(CLS_SERVICE, lpparam.classLoader, "onCreate", new XC_MethodHook() {
                 @Override
@@ -77,7 +76,7 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
-        // 3. 版本欺骗 (7.5.0)
+        // 3. 版本欺骗
         try {
             XposedHelpers.findAndHookMethod(CLS_VERSION_UTIL, lpparam.classLoader, "b", String.class, new XC_MethodReplacement() {
                 @Override
@@ -87,10 +86,10 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
-        // 4. 心脏起搏 (Lac.a(1))
+        // 4. 心脏起搏
         patchHeartbeat(lpparam.classLoader);
 
-        // 5. 监控 IPC 连接
+        // 5. 监控 IPC
         XC_MethodHook ipcHook = new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -149,27 +148,23 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🚑 核心复活逻辑
+    // 🚑 V14: 步进式排查与空指针防御
     private void resurrectAndConnect(ClassLoader cl, Context ctx) {
         try {
-            // 优先使用 Service Context
             Context targetCtx = (mServiceContext != null) ? mServiceContext : ctx;
-            if (mServiceContext != null) {
-                sendAppLog(ctx, "⚡ 使用 Service Context 进行暴力连接");
-            } else {
-                sendAppLog(ctx, "⚠️ 降级使用广播 Context 进行连接");
-            }
+            sendAppLog(ctx, ">>> 开始 V14 强力复活 <<<");
 
-            // 1. 获取/复活 WidgetManager
+            // 1. 检查 WidgetManager
             Class<?> holderClass = XposedHelpers.findClass(CLS_WIDGET_MGR_HOLDER, cl);
             Object mgrInstance = XposedHelpers.getStaticObjectField(holderClass, "a");
             
             if (mgrInstance == null) {
-                sendAppLog(ctx, "WidgetManager为空，正在复活...");
+                sendAppLog(ctx, "mgrInstance为空，尝试新建...");
                 Class<?> mgrClass = XposedHelpers.findClass(CLS_WIDGET_MGR, cl);
                 try {
                     mgrInstance = XposedHelpers.newInstance(mgrClass);
                 } catch (Throwable t) {
+                    // 尝试反射构造
                     Constructor<?>[] cons = mgrClass.getDeclaredConstructors();
                     if (cons.length > 0) {
                         cons[0].setAccessible(true);
@@ -178,41 +173,68 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
                 if (mgrInstance != null) {
                     XposedHelpers.setStaticObjectField(holderClass, "a", mgrInstance);
-                    sendAppLog(ctx, "✅ WidgetManager 复活成功");
+                    sendAppLog(ctx, "mgrInstance 复活成功");
                 } else {
-                    sendAppLog(ctx, "❌ 复活失败");
+                    sendAppLog(ctx, "Fatal: mgrInstance 无法创建");
                     return;
                 }
+            } else {
+                sendAppLog(ctx, "mgrInstance 存活");
             }
 
-            // 2. 强制连接
+            // 2. 安全调用 l.a()
             try {
-                XposedHelpers.callMethod(mgrInstance, "a", targetCtx); 
-                sendAppLog(ctx, "调用 l.a(ServiceContext) 成功");
+                sendAppLog(ctx, "尝试调用 l.a(Context)...");
+                XposedHelpers.callMethod(mgrInstance, "a", targetCtx);
+                sendAppLog(ctx, "l.a(Context) 调用完成");
             } catch (Throwable t1) {
                 try {
+                    sendAppLog(ctx, "调用 l.a() 无参...");
                     XposedHelpers.callMethod(mgrInstance, "a"); 
-                    sendAppLog(ctx, "调用 l.a() 成功");
+                    sendAppLog(ctx, "l.a() 调用完成");
                 } catch (Throwable t2) {
-                     sendAppLog(ctx, "连接方法调用失败: " + t1.getMessage());
+                     sendAppLog(ctx, "Err: 连接方法调用均失败");
                 }
             }
             
-            // 3. 顺便发 SwitchInfo
-            sendMultipleSwitching(cl, ctx);
+            // 3. 安全发送 SwitchInfo (检查 EventBus)
+            safeSendSwitchInfo(cl, ctx);
 
         } catch (Throwable e) {
-            sendAppLog(ctx, "暴力连接异常: " + e.getMessage());
+            sendAppLog(ctx, "致命异常: " + e.getMessage());
+        }
+    }
+
+    // 安全发送：防止 EventBus 为空导致 Crash
+    private void safeSendSwitchInfo(ClassLoader cl, Context ctx) {
+        try {
+            Class<?> busClass = XposedHelpers.findClass(CLS_BUS, cl);
+            Object bus = XposedHelpers.callStaticMethod(busClass, "a");
+            
+            if (bus == null) {
+                sendAppLog(ctx, "⚠️ EventBus(d.e) 未初始化，跳过 Switch");
+                return;
+            }
+
+            Class<?> switchCls = XposedHelpers.findClass(CLS_SWITCH_INFO, cl);
+            Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            Object switchObj = XposedHelpers.newInstance(switchCls, 0, 4);
+            Object msg = XposedHelpers.newInstance(wrapCls, 0x7d7, switchObj);
+            
+            XposedHelpers.callMethod(bus, "a", msg);
+            sendAppLog(ctx, "SwitchInfo 安全发送完毕");
+        } catch (Throwable e) {
+            sendAppLog(ctx, "Switch 发送异常: " + e.getMessage());
         }
     }
 
     private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
         if (status == 13) {
             new Thread(()->{
-                sendAppLog(ctx, "执行: 预热(28) -> 切换 -> 启动(13)");
+                sendAppLog(ctx, "执行连招: 28 -> Switch -> 13 -> 25");
                 sendData(cl, 28, ctx); 
                 try{Thread.sleep(300);}catch(Exception e){}
-                sendMultipleSwitching(cl, ctx);
+                safeSendSwitchInfo(cl, ctx); // 使用安全发送
                 try{Thread.sleep(300);}catch(Exception e){}
                 sendData(cl, 13, ctx);
                 try{Thread.sleep(500);}catch(Exception e){}
@@ -227,29 +249,14 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 🔴 修复点：补全了 sendMultipleSwitching 方法
-    private void sendMultipleSwitching(ClassLoader cl, Context ctx) {
-        try {
-            Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
-            Class<?> switchCls = XposedHelpers.findClass(CLS_SWITCH_INFO, cl);
-            Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
-            
-            // 穷举切换来源：0->4, 1->4, 4->4
-            int[] fromVendors = {0, 1, 4};
-            for (int from : fromVendors) {
-                Object switchObj = XposedHelpers.newInstance(switchCls, from, 4);
-                Object msg = XposedHelpers.newInstance(wrapCls, 0x7d7, switchObj);
-                XposedHelpers.callMethod(bus, "a", msg);
-            }
-            sendAppLog(ctx, "SwitchInfo 已穷举发送");
-        } catch (Throwable e) {
-            // sendAppLog(ctx, "Switch Err: " + e.getMessage());
-        }
-    }
-
     private void sendData(ClassLoader cl, int statusValue, Context ctx) {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
+            if (bus == null) {
+                sendAppLog(ctx, "EventBus 为空，无法发送 Status " + statusValue);
+                return;
+            }
+            
             Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
             Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
             int[] vendors = {4, 1, 2}; 
@@ -262,23 +269,31 @@ public class MainHook implements IXposedHookLoadPackage {
                     XposedHelpers.callMethod(bus, "a", msg);
                 } catch(Throwable t) {}
             }
-            sendAppLog(ctx, "Status " + statusValue + " 已发送");
+            sendAppLog(ctx, "Status " + statusValue + " 已广播");
         } catch (Exception e) { sendAppLog(ctx, "Err: " + e.getMessage()); }
     }
 
+    // sendGuide 省略，逻辑同上，记得加 bus null 检查
     private void sendGuide(ClassLoader cl, Context ctx) {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
+            if (bus == null) return; 
+            
             Class<?> guideCls = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
             Object gObj = XposedHelpers.newInstance(guideCls, 4);
             XposedHelpers.callMethod(gObj, "setGuideType", 2);
             XposedHelpers.callMethod(gObj, "setTurnId", 2);
-            XposedHelpers.callMethod(gObj, "setCurRoadName", "V13修复编译");
+            XposedHelpers.callMethod(gObj, "setCurRoadName", "V14 稳定版");
             XposedHelpers.callMethod(gObj, "setNextTurnDistance", 500);
             Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
             Object msg = XposedHelpers.newInstance(wrapCls, 0x7d0, gObj);
             XposedHelpers.callMethod(bus, "a", msg);
         } catch (Exception e) {}
+    }
+
+    // 补全缺失的方法
+    private void sendMultipleSwitching(ClassLoader cl, Context ctx) {
+        safeSendSwitchInfo(cl, ctx);
     }
 
     private void startOfficialService(Context ctx, ClassLoader cl) {
@@ -313,7 +328,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     sendAppLog(ctx, "看门狗: IPC正常");
                     return;
                 }
-                sendAppLog(ctx, "⚠️ 看门狗: 触发暴力连接 (Use ServiceContext)...");
+                sendAppLog(ctx, "⚠️ 看门狗: 触发暴力连接...");
                 resurrectAndConnect(cl, ctx);
             } catch (Exception e) {}
         }).start();
