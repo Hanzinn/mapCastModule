@@ -4,44 +4,45 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#000000"
-    android:padding="12dp">
+    android:padding="10dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:background="#222222"
-        android:padding="10dp">
+        android:padding="8dp">
         <TextView
             android:id="@+id/tv_lsp_status"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="LSPosed: 未激活"
-            android:textColor="#FF0000"
+            android:text="LSPosed: 检查中"
+            android:textColor="#FFFFFF"
             android:gravity="center"
-            android:textStyle="bold"/>
+            android:textSize="12sp"/>
         <TextView
             android:id="@+id/tv_hook_status"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="服务: 未连接"
-            android:textColor="#FF0000"
+            android:textColor="#FFFFFF"
             android:gravity="center"
-            android:textStyle="bold"/>
+            android:textSize="12sp"/>
     </LinearLayout>
 
     <Button
-        android:id="@+id/btn_activate"
+        android:id="@+id/btn_super_test"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="🚀 激活仪表 (序列 1 -> 27)"
+        android:layout_height="70dp"
+        android:text="🔥 开启全量轰炸测试 (直到反应为止)"
         android:layout_marginTop="15dp"
-        android:backgroundTint="#009688"/>
+        android:backgroundTint="#D32F2F"
+        android:textStyle="bold"/>
 
     <Button
-        android:id="@+id/btn_guide"
+        android:id="@+id/btn_guide_test"
         android:layout_width="match_parent"
         android:layout_height="60dp"
         android:text="🚗 模拟路口数据"
@@ -49,35 +50,35 @@
         android:backgroundTint="#FF9800"/>
 
     <Button
-        android:id="@+id/btn_cruise"
+        android:id="@+id/btn_clear_log"
         android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:text="🛳️ 模拟巡航模式"
+        android:layout_height="40dp"
+        android:text="🗑️ 清空日志"
         android:layout_marginTop="10dp"
-        android:backgroundTint="#FF5722"/>
+        android:backgroundTint="#555555"/>
 
     <Button
         android:id="@+id/btn_save_log"
         android:layout_width="match_parent"
-        android:layout_height="50dp"
-        android:text="💾 保存日志到 Download"
-        android:layout_marginTop="10dp"
-        android:backgroundTint="#555555"/>
+        android:layout_height="40dp"
+        android:text="💾 保存日志 (Download)"
+        android:layout_marginTop="5dp"
+        android:backgroundTint="#444444"/>
 
     <ScrollView
         android:id="@+id/scrollView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginTop="15dp"
+        android:layout_marginTop="10dp"
         android:background="#111111">
         <TextView
             android:id="@+id/tv_log"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textColor="#00FF00"
-            android:padding="10dp"
-            android:textSize="12sp"
+            android:padding="8dp"
+            android:textSize="11sp"
             android:fontFamily="monospace"
-            android:text="--- 日志监控就绪 ---\n"/>
+            android:text="--- 等待测试指令 ---\n"/>
     </ScrollView>
 </LinearLayout>
