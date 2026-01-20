@@ -204,4 +204,120 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             
             // 5. 补发激活信号
-            safe
+            safeSendSwitchInfo(cl, ctx);
+
+        } catch (Throwable e) {
+            sendAppLog(ctx, "复活异常: " + e.getMessage());
+        }
+    }
+
+    private void safeSendSwitchInfo(ClassLoader cl, Context ctx) {
+        try {
+            Class<?> busClass = XposedHelpers.findClass(CLS_BUS_FACTORY, cl);
+            Object bus = XposedHelpers.callStaticMethod(busClass, "a");
+            if (bus == null) return;
+
+            Class<?> switchCls = XposedHelpers.findClass(CLS_SWITCH_INFO, cl);
+            Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            Object switchObj = XposedHelpers.newInstance(switchCls, 0, 4);
+            Object msg = XposedHelpers.newInstance(wrapCls, 0x7d7, switchObj);
+            
+            XposedHelpers.callMethod(bus, "a", msg);
+            sendAppLog(ctx, "Switch(0->4) Sent");
+        } catch (Throwable e) {}
+    }
+
+    private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
+        new Thread(()->{
+            if (status == 13) {
+                // 连招优化：先唤醒再发
+                resurrectAndConnect(cl, ctx); 
+                try{Thread.sleep(500);}catch(Exception e){}
+                
+                sendData(cl, 28, ctx); 
+                try{Thread.sleep(300);}catch(Exception e){}
+                safeSendSwitchInfo(cl, ctx); 
+                try{Thread.sleep(300);}catch(Exception e){}
+                sendData(cl, 13, ctx); 
+                try{Thread.sleep(500);}catch(Exception e){}
+                sendData(cl, 25, ctx);
+            } else {
+                sendData(cl, status, ctx);
+            }
+        }).start();
+    }
+
+    private void sendData(ClassLoader cl, int statusValue, Context ctx) {
+        try {
+            Class<?> busClass = XposedHelpers.findClass(CLS_BUS_FACTORY, cl);
+            Object bus = XposedHelpers.callStaticMethod(busClass, "a");
+            if (bus == null) return;
+
+            Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
+            Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
+            
+            int[] vendors = {4, 1, 2}; 
+            for (int v : vendors) {
+                try {
+                    Object infoObj = XposedHelpers.newInstance(infoCls, v); 
+                    try { XposedHelpers.callMethod(infoObj, "setMapVendor", v); } catch(Throwable t){}
+                    XposedHelpers.callMethod(infoObj, "setStatus", statusValue);
+                    
+                    Object msg = XposedHelpers.newInstance(wrapCls, 0x7d2, infoObj);
+                    XposedHelpers.callMethod(bus, "a", msg);
+                } catch(Exception e) {}
+            }
+            sendAppLog(ctx, "Status " + statusValue + " Sent");
+        } catch (Exception e) {}
+    }
+    
+    private void sendGuide(ClassLoader cl, Context ctx) {
+        try {
+            Class<?> busClass = XposedHelpers.findClass(CLS_BUS_FACTORY, cl);
+            Object bus = XposedHelpers.callStaticMethod(busClass, "a");
+            if (bus == null) return;
+            
+            Class<?> guideCls = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
+            Object gObj = XposedHelpers.newInstance(guideCls, 4);
+            XposedHelpers.callMethod(gObj, "setGuideType", 2);
+            XposedHelpers.callMethod(gObj, "setTurnId", 2);
+            XposedHelpers.callMethod(gObj, "setCurRoadName", "V17唤醒");
+            XposedHelpers.callMethod(gObj, "setNextTurnDistance", 500);
+            
+            Object msg = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WRAPPER, cl), 0x7d0, gObj);
+            XposedHelpers.callMethod(bus, "a", msg);
+        } catch (Exception e) {}
+    }
+
+    private void startOfficialService(Context ctx, ClassLoader cl) {
+        try {
+            Intent intent = new Intent();
+            intent.setComponent(new ComponentName("ecarx.naviservice", "ecarx.naviservice.service.NaviService"));
+            intent.setAction("ecarx.intent.action.NAVI_SERVICE_STARTED");
+            intent.addCategory("ecarx.intent.category.NAVI_INNER");
+            ctx.startService(intent);
+            
+            new Thread(()->{
+                try {
+                    Thread.sleep(4000);
+                    if (!isIpcConnected) {
+                        resurrectAndConnect(cl, ctx);
+                    }
+                } catch (Exception e) {}
+            }).start();
+
+            sendAppLog(ctx, "冷启动序列(V17)已触发");
+        } catch (Exception e) { sendAppLog(ctx, "启动失败"); }
+    }
+
+    private void sendAppLog(Context ctx, String log) {
+        try {
+            Context c = (ctx != null) ? ctx : android.app.AndroidAppHelper.currentApplication();
+            if (c != null) {
+                Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
+                i.putExtra("log", log);
+                c.sendBroadcast(i);
+            }
+        } catch (Throwable t) {}
+    }
+}
