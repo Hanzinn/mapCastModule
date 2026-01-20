@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Environment; // 🟢 必须引入这个
 import android.view.Window;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -27,7 +28,7 @@ public class MainActivity extends Activity {
     // 自身激活状态检测 (Xposed 会 Hook 这个方法返回 true)
     public boolean isModuleActive() { return false; }
 
-    // 广播接收器：接收 Hook 模块传回的日志和状态
+    // 广播接收器
     private BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context ctx, Intent intent) {
@@ -52,7 +53,6 @@ public class MainActivity extends Activity {
         }
     };
 
-    // 辅助方法：设置状态灯颜色
     private void setStatus(TextView tv, String text) {
         tv.setText(text);
         tv.setTextColor(Color.GREEN);
@@ -72,60 +72,97 @@ public class MainActivity extends Activity {
         tvIpc = findViewById(R.id.tv_ipc_status);
         scrollView = findViewById(R.id.scrollView);
 
-        // 注册广播接收
+        // 注册广播
         registerReceiver(receiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
         // --- 按钮事件绑定 ---
 
-        // 1. 冷启动服务 (包含版本欺骗+心脏起搏)
+        // 1. 冷启动服务
         findViewById(R.id.btn_start_service).setOnClickListener(v -> {
-            // 重置 UI 状态
             tvSvc.setText("服务: ⏳"); tvSvc.setTextColor(Color.YELLOW);
             tvIpc.setText("链路IPC: ⏳"); tvIpc.setTextColor(Color.YELLOW);
-            
             appendLog("步骤1: 发送冷启动指令...");
             sendBroadcast(new Intent("XSF_ACTION_START_SERVICE"));
         });
 
-        // 2. 暴力重连 (手动触发 B 计划)
-        // 如果看门狗没触发，或者是想手动重试，点这个
+        // 2. 暴力重连 (B 计划)
         findViewById(R.id.btn_force_connect).setOnClickListener(v -> {
             appendLog("步骤2: 手动执行 B 计划 (Switch + 暴力连接)...");
             sendBroadcast(new Intent("XSF_ACTION_FORCE_CONNECT"));
         });
 
-        // 3. 激活仪表 (最终连招)
+        // 3. 激活仪表
         findViewById(R.id.btn_activate).setOnClickListener(v -> {
-            appendLog("步骤3: 发送激活连招 (Switch->13->25)...");
+            appendLog("步骤3: 发送激活连招...");
             sendStatus(13); 
         });
 
-        // 巡航模式
+        // 巡航控制
         findViewById(R.id.btn_start_cruise).setOnClickListener(v -> {
             appendLog("发送: 巡航模式 (28)");
             sendStatus(28);
         });
 
-        // 停止导航
         findViewById(R.id.btn_stop_cruise).setOnClickListener(v -> {
             appendLog("发送: 停止 (29)");
             sendStatus(29);
         });
+
+        // 💾 保存日志 (修改了路径)
+        findViewById(R.id.btn_save_log).setOnClickListener(v -> {
+            saveLogToFile();
+        });
     }
 
-    // 发送状态指令的封装
     private void sendStatus(int s) {
         Intent i = new Intent("XSF_ACTION_SEND_STATUS");
         i.putExtra("status", s);
         sendBroadcast(i);
     }
 
-    // 本地日志显示 (确保在主线程更新 UI)
+    // 保存日志到文件 (路径已修改)
+    private void saveLogToFile() {
+        String logContent = tvLog.getText().toString();
+        if (logContent.isEmpty()) {
+            Toast.makeText(this, "日志为空，无需保存", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            // 📂 修改路径：/sdcard/Download/AmapHelper_Logs/
+            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File dir = new File(downloadDir, "AmapHelper_Logs");
+            
+            if (!dir.exists()) {
+                boolean created = dir.mkdirs();
+                if (!created) {
+                    // 如果 Download 创建失败，回退到根目录
+                    dir = new File(Environment.getExternalStorageDirectory(), "AmapHelper_Logs");
+                    dir.mkdirs();
+                }
+            }
+
+            String fileName = "Log_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date()) + ".txt";
+            File file = new File(dir, fileName);
+
+            FileOutputStream fos = new FileOutputStream(file);
+            fos.write(logContent.getBytes());
+            fos.close();
+
+            String msg = "日志已保存:\n" + file.getAbsolutePath();
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+            appendLog("✅ " + msg);
+
+        } catch (Exception e) {
+            appendLog("❌ 保存失败: " + e.getMessage());
+            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void appendLog(String m) {
         runOnUiThread(() -> {
             if (tvLog != null) {
                 tvLog.append("[" + sdf.format(new Date()) + "] " + m + "\n");
-                // 自动滚动到底部
                 if (scrollView != null) {
                     scrollView.post(() -> scrollView.fullScroll(ScrollView.FOCUS_DOWN));
                 }
@@ -136,7 +173,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // 检查 LSPosed 是否激活了本模块
         boolean active = isModuleActive();
         tvLsp.setText(active ? "LSP: ✅" : "LSP: ❌");
         tvLsp.setTextColor(active ? Color.GREEN : Color.RED);
