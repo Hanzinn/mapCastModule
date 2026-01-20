@@ -6,7 +6,9 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Binder; // 🟢 需要这个
 import android.os.IBinder; 
+import android.content.ServiceConnection; // 🟢 需要这个
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -20,7 +22,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_XSF = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // --- 混淆类名 (Short Names) ---
+    // --- 混淆类名 ---
     private static final String CLS_PROTOCOL_MGR = "g"; 
     private static final String CLS_WIDGET_MGR_HOLDER = "q"; 
     private static final String CLS_WIDGET_MGR = "l"; 
@@ -55,7 +57,7 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context appCtx = (Context) param.thisObject;
-                sendAppLog(appCtx, "STATUS_HOOK_READY (V17)");
+                sendAppLog(appCtx, "STATUS_HOOK_READY (V18)");
                 registerReceiver(appCtx, lpparam.classLoader);
             }
         });
@@ -71,7 +73,7 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
-        // 3. 施加生存补丁 (版本 + 心脏)
+        // 3. 生存补丁
         applySurvivalPatches(lpparam.classLoader);
 
         // 4. 全方位 IPC 监控
@@ -90,10 +92,8 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void applySurvivalPatches(ClassLoader cl) {
         try {
-            // 版本欺骗
             XposedHelpers.findAndHookMethod(CLS_VERSION_UTIL, cl, "b", String.class, XC_MethodReplacement.returnConstant(70500));
             
-            // 心脏起搏 Hook (被动)
             XposedHelpers.findAndHookMethod(CLS_PROTOCOL_MGR, cl, "f", XC_MethodReplacement.returnConstant(true));
             XposedHelpers.findAndHookMethod(CLS_PROTOCOL_MGR, cl, "a", new XC_MethodHook() {
                 @Override
@@ -138,76 +138,57 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🚑 核心 V17：主动唤醒 + 方法轰炸
+    // 🚑 核心 V18：Matrix 注入 (伪造系统回调)
     private void resurrectAndConnect(ClassLoader cl, Context ctx) {
         try {
             Context targetCtx = (mServiceContext != null) ? mServiceContext : ctx;
-            sendAppLog(ctx, ">>> V17 主动唤醒 (Awaken) <<<");
+            sendAppLog(ctx, ">>> V18 伪造回调 (Matrix) <<<");
 
-            // 1. 🟢 主动唤醒协议单例 (g.a())
-            try {
-                Class<?> gClass = XposedHelpers.findClass(CLS_PROTOCOL_MGR, cl);
-                Object gInst = XposedHelpers.callStaticMethod(gClass, "a");
-                if (gInst != null) {
-                    sendAppLog(ctx, "协议心脏(g)已手动激活");
-                } else {
-                    sendAppLog(ctx, "协议心脏(g)激活失败");
-                }
-            } catch (Throwable t) {
-                sendAppLog(ctx, "g.a() 调用失败: " + t.getMessage());
-            }
-
-            // 2. 复活 WidgetManager (l)
+            // 1. 获取 WidgetManager (l)
             Class<?> holderClass = XposedHelpers.findClass(CLS_WIDGET_MGR_HOLDER, cl);
             Object mgrInstance = XposedHelpers.getStaticObjectField(holderClass, "a");
             
             if (mgrInstance == null) {
-                sendAppLog(ctx, "WidgetMgr为空，复活中...");
+                sendAppLog(ctx, "WidgetMgr复活中...");
                 mgrInstance = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WIDGET_MGR, cl));
                 XposedHelpers.setStaticObjectField(holderClass, "a", mgrInstance);
             }
 
             if (mgrInstance != null) {
-                // 3. 🔵 字段强注 (直接塞 Context)
-                try {
-                    // l.smali 中字段 'a' 通常是 Context
-                    XposedHelpers.setObjectField(mgrInstance, "a", targetCtx);
-                    // 字段 'b' 可能是状态 int，设为 1
-                    // XposedHelpers.setIntField(mgrInstance, "b", 1); 
-                } catch (Throwable t) {}
+                // 2. 正常尝试初始化 (保持 V17 逻辑)
+                try { XposedHelpers.callMethod(mgrInstance, "a", targetCtx); } catch (Throwable t) {}
+                try { XposedHelpers.callMethod(mgrInstance, "b"); } catch (Throwable t) {}
 
-                // 4. 🔴 方法轰炸 (a 和 b 都试一遍)
-                boolean methodCalled = false;
-                
-                // 尝试 a(Context)
+                // 3. 🔴 绝杀：手动触发 onServiceConnected
                 try {
-                    XposedHelpers.callMethod(mgrInstance, "a", targetCtx); 
-                    sendAppLog(ctx, "调用 l.a(Context) 成功");
-                    methodCalled = true;
-                } catch (Throwable t) {}
-
-                // 尝试 b() - 你的建议！
-                try {
-                    XposedHelpers.callMethod(mgrInstance, "b");
-                    sendAppLog(ctx, "调用 l.b() 成功"); // 可能是真正的 bind
-                    methodCalled = true;
-                } catch (Throwable t) {}
-
-                // 尝试 b(Context)
-                try {
-                    XposedHelpers.callMethod(mgrInstance, "b", targetCtx);
-                    sendAppLog(ctx, "调用 l.b(Context) 成功");
-                    methodCalled = true;
-                } catch (Throwable t) {}
-
-                if (!methodCalled) sendAppLog(ctx, "⚠️ 所有连接方法尝试均失败");
+                    // 获取 l 中的字段 i (即 ServiceConnection o)
+                    // l.smali: public i:Landroid/content/ServiceConnection;
+                    Object conn = XposedHelpers.getObjectField(mgrInstance, "i");
+                    
+                    if (conn != null) {
+                        sendAppLog(ctx, "找到连接器(o)，准备注入伪造Binder...");
+                        
+                        ComponentName fakeName = new ComponentName("com.fake.pkg", "com.fake.cls");
+                        IBinder fakeBinder = new Binder(); // 纯净的 Binder
+                        
+                        // 调用 o.onServiceConnected(name, binder)
+                        // 这会触发我们自己的 Hook (打印 IPC Connected)，也会触发 l 的内部逻辑
+                        XposedHelpers.callMethod(conn, "onServiceConnected", fakeName, fakeBinder);
+                        
+                        sendAppLog(ctx, "⚡ 伪造回调已执行！检查 IPC 灯！");
+                    } else {
+                        sendAppLog(ctx, "❌ 连接器(o)为空，无法注入");
+                    }
+                } catch (Throwable t) {
+                    sendAppLog(ctx, "Matrix注入失败: " + t.getMessage());
+                }
             }
             
-            // 5. 补发激活信号
+            // 4. 补发激活信号
             safeSendSwitchInfo(cl, ctx);
 
         } catch (Throwable e) {
-            sendAppLog(ctx, "复活异常: " + e.getMessage());
+            sendAppLog(ctx, "V18 异常: " + e.getMessage());
         }
     }
 
@@ -230,7 +211,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
         new Thread(()->{
             if (status == 13) {
-                // 连招优化：先唤醒再发
+                // 连招优化：先 Matrix 注入再发
                 resurrectAndConnect(cl, ctx); 
                 try{Thread.sleep(500);}catch(Exception e){}
                 
@@ -281,7 +262,7 @@ public class MainHook implements IXposedHookLoadPackage {
             Object gObj = XposedHelpers.newInstance(guideCls, 4);
             XposedHelpers.callMethod(gObj, "setGuideType", 2);
             XposedHelpers.callMethod(gObj, "setTurnId", 2);
-            XposedHelpers.callMethod(gObj, "setCurRoadName", "V17唤醒");
+            XposedHelpers.callMethod(gObj, "setCurRoadName", "V18 Matrix");
             XposedHelpers.callMethod(gObj, "setNextTurnDistance", 500);
             
             Object msg = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WRAPPER, cl), 0x7d0, gObj);
@@ -306,7 +287,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Exception e) {}
             }).start();
 
-            sendAppLog(ctx, "冷启动序列(V17)已触发");
+            sendAppLog(ctx, "冷启动序列(V18)已触发");
         } catch (Exception e) { sendAppLog(ctx, "启动失败"); }
     }
 
