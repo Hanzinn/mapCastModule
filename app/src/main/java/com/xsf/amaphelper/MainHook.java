@@ -8,7 +8,6 @@ import android.content.IntentFilter;
 import java.lang.reflect.Field;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodReplacement;
-import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
@@ -50,7 +49,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                     int status = intent.getIntExtra("status", 0);
                     if (status == 13) {
-                        sendAppLog(ctx, "🚀 触发唤醒序列 (1 -> 27)");
+                        sendAppLog(ctx, "🚀 收到激活指令，执行 1 -> 27 序列");
                         sendStatus(cl, 1, ctx);
                         new Thread(() -> {
                             try { Thread.sleep(300); } catch (Exception e) {}
@@ -59,12 +58,12 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 } else if ("XSF_ACTION_SEND_GUIDE".equals(action)) {
                     String type = intent.getStringExtra("type");
-                    sendStatus(cl, 27, ctx); // 模拟路口前先确保是Navi状态
+                    sendStatus(cl, 27, ctx); // 切换到导航状态
                     if ("cruise".equals(type)) {
-                        sendAppLog(ctx, "🛳️ 发送巡航模拟数据");
-                        sendGuide(cl, "当前路", "巡航中", 1, 0, ctx);
+                        sendAppLog(ctx, "🛳️ 收到巡航指令，发送巡航包");
+                        sendGuide(cl, "当前道路", "巡航中", 1, 0, ctx);
                     } else {
-                        sendAppLog(ctx, "🚗 发送路口模拟数据");
+                        sendAppLog(ctx, "🚗 收到路口指令，发送模拟包");
                         sendGuide(cl, "测试路", "成功街", 2, 500, ctx);
                     }
                 }
@@ -80,7 +79,7 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
             Class<?> statusClass = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-            Object statusObj = XposedHelpers.newInstance(statusClass, 2); // 尝试构造2
+            Object statusObj = XposedHelpers.newInstance(statusClass, 2);
             Field f = XposedHelpers.findFirstFieldByExactType(statusClass, int.class);
             f.setAccessible(true);
             f.setInt(statusObj, status);
