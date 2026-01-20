@@ -6,7 +6,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -35,13 +34,11 @@ public class MainActivity extends Activity {
         public void onReceive(Context context, Intent intent) {
             String content = intent.getStringExtra("log");
             if (content == null) return;
-            if (content.contains("模块加载成功")) {
-                runOnUiThread(() -> {
-                    tvHookStatus.setText("服务: 已连接 ✅");
-                    tvHookStatus.setTextColor(Color.GREEN);
-                });
+            if (content.contains("加载成功")) {
+                tvHookStatus.setText("服务: 已连接 ✅");
+                tvHookStatus.setTextColor(Color.GREEN);
             }
-            logLocal("模块: " + content);
+            logLocal("模块回传: " + content);
         }
     };
 
@@ -58,25 +55,33 @@ public class MainActivity extends Activity {
 
         registerReceiver(logReceiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
-        // 🟢 按钮1：全量轰炸测试
-        findViewById(R.id.btn_super_test).setOnClickListener(v -> {
-            logLocal("🔥 启动全量轰炸测试：1 -> 25 -> 13 -> 27");
+        // 按钮1：核心轰炸
+        findViewById(R.id.btn_super_activate).setOnClickListener(v -> {
+            logLocal("手动发送: 核心激活序列 (13->25->27)");
             Intent i = new Intent("XSF_ACTION_SUPER_TEST");
             sendBroadcast(i);
         });
 
-        // 🟢 按钮2：路口测试
-        findViewById(R.id.btn_guide_test).setOnClickListener(v -> {
-            logLocal("🚗 尝试发送模拟路口...");
+        // 按钮2：路口模拟
+        findViewById(R.id.btn_guide).setOnClickListener(v -> {
+            logLocal("手动发送: 模拟路口数据");
             Intent i = new Intent("XSF_ACTION_SEND_GUIDE");
+            i.putExtra("type", "turn");
             sendBroadcast(i);
         });
 
-        findViewById(R.id.btn_clear_log).setOnClickListener(v -> tvLog.setText(""));
+        // 按钮3：巡航模拟
+        findViewById(R.id.btn_cruise).setOnClickListener(v -> {
+            logLocal("手动发送: 模拟巡航数据");
+            Intent i = new Intent("XSF_ACTION_SEND_GUIDE");
+            i.putExtra("type", "cruise");
+            sendBroadcast(i);
+        });
+
         findViewById(R.id.btn_save_log).setOnClickListener(v -> saveToDownload());
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE}, 100);
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 100);
         }
     }
 
@@ -90,7 +95,7 @@ public class MainActivity extends Activity {
     private void saveToDownload() {
         try {
             File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            String name = "XSF_SuperTest_" + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
+            String name = "XSF_FinalTest_" + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
             File file = new File(path, name);
             FileOutputStream fos = new FileOutputStream(file);
             fos.write(tvLog.getText().toString().getBytes());
