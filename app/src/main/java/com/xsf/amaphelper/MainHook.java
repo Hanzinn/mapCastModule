@@ -7,6 +7,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
+import android.os.Bundle;
 import android.os.IBinder; 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -18,18 +20,15 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_XSF = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // 类名常量 (根据 Smali 分析)
+    // Smali 类名映射
     private static final String CLS_BUS = "ecarx.naviservice.d.e";
     private static final String CLS_WRAPPER = "ecarx.naviservice.map.bz"; 
     private static final String CLS_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
-    private static final String CLS_SWITCH_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo"; // 新增
+    private static final String CLS_SWITCH_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
     private static final String CLS_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
     private static final String CLS_SERVICE = "ecarx.naviservice.service.NaviService";
-    private static final String CLS_CONNECTION = "ecarx.naviservice.b";
-    
-    // 专家建议的拦截类
-    private static final String CLS_VERSION_UTIL = "ecarx.naviservice.d.y"; // 版本解析
-    private static final String CLS_PROTOCOL_MGR = "ecarx.naviservice.map.d.g"; // 协议绑定管理
+    private static final String CLS_CONNECTION = "ecarx.naviservice.b"; 
+    private static final String CLS_VERSION_UTIL = "ecarx.naviservice.d.y";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -39,7 +38,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_XSF)) return;
 
-        // 1. Hook Application: 注入反馈
+        // 1. 注入反馈
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -49,40 +48,27 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         });
 
-        // 2. 🛡️【关键补丁】欺骗版本号检查 (z.smali/y.smali)
+        // 2. 欺骗版本号 (保留这个，很有用)
         try {
             XposedHelpers.findAndHookMethod(CLS_VERSION_UTIL, lpparam.classLoader, "b", String.class, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    // 强行返回 70500 (7.5.0)，防止系统觉得高德版本太低而拒收
                     param.setResult(70500); 
-                    // sendAppLog(null, "已拦截版本校验，伪装为 7.5.0");
                 }
             });
-        } catch (Throwable t) { /* 忽略类找不到的错误 */ }
+        } catch (Throwable t) {}
 
-        // 3. 🛡️【核心补丁】伪造服务绑定状态 (g.smali)
-        try {
-            // 强制让 isBind (字段 c) 变为 true
-            XposedHelpers.findAndHookMethod(CLS_PROTOCOL_MGR, lpparam.classLoader, "f", new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
-                    XposedHelpers.setBooleanField(param.thisObject, "c", true);
-                    return true;
+        // 3. 监控 bindService (看看谁在尝试连接)
+        XposedHelpers.findAndHookMethod(Context.class, "bindService", Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                Intent i = (Intent) param.args[0];
+                // 打印出它想连谁，帮我们定位问题
+                if (i.getComponent() != null) {
+                    sendAppLog(null, "系统尝试连接: " + i.getComponent().getShortClassName());
                 }
-            });
-            
-            // 拦截 h() 方法，模拟回调触发
-            XposedHelpers.findAndHookMethod(CLS_PROTOCOL_MGR, lpparam.classLoader, "h", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    Object lac = XposedHelpers.getObjectField(param.thisObject, "g");
-                    if (lac != null) {
-                        XposedHelpers.callMethod(lac, "a"); // 触发 connected
-                    }
-                }
-            });
-        } catch (Throwable t) { /* 忽略 */ }
+            }
+        });
 
         // 4. 服务运行反馈
         try {
@@ -94,7 +80,8 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
-        // 5. IPC 连接监控
+        // 5. 🔴 核心：监控 IPC 连接 (ecarx.naviservice.b)
+        // 只要这个方法被调用，说明物理链路通了
         try {
             XposedHelpers.findAndHookMethod(CLS_CONNECTION, lpparam.classLoader, "onServiceConnected", ComponentName.class, IBinder.class, new XC_MethodHook() {
                 @Override
@@ -102,7 +89,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     sendAppLog(null, "STATUS_IPC_CONNECTED"); 
                 }
             });
-        } catch (Throwable t) {}
+        } catch (Throwable t) {
+            sendAppLog(null, "Err: 找不到连接类 " + CLS_CONNECTION);
+        }
     }
 
     private void registerReceiver(Context context, ClassLoader cl) {
@@ -114,23 +103,18 @@ public class MainHook implements IXposedHookLoadPackage {
                     startOfficialService(ctx);
                 } else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                     int status = intent.getIntExtra("status", 0);
-                    // 激活流程：切换信号 -> 13 -> 25
                     if (status == 13) {
-                        // 1. 先发 0x7d7 (Switch to Vendor 4)
                         sendMapSwitching(cl, ctx);
-                        
-                        // 2. 延时发 13
                         new Thread(()->{ 
                             try{Thread.sleep(500);}catch(Exception e){} 
                             sendData(cl, 13, 4, ctx); 
-                            
-                            // 3. 再发 25
                             try{Thread.sleep(500);}catch(Exception e){}
                             sendData(cl, 25, 4, ctx);
                         }).start();
                     } 
                     else if (status == 28) {
                         sendData(cl, 28, 4, ctx);
+                        // 补发 TBT 防止黑屏
                         new Thread(()->{ try{Thread.sleep(200);}catch(Exception e){} sendGuide(cl, ctx); }).start();
                     } else {
                         sendData(cl, status, 4, ctx);
@@ -144,34 +128,25 @@ public class MainHook implements IXposedHookLoadPackage {
         context.registerReceiver(receiver, filter);
     }
 
-    // 🚀 新增：发送地图源切换信号 (0x7d7)
     private void sendMapSwitching(ClassLoader cl, Context ctx) {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
             Class<?> switchCls = XposedHelpers.findClass(CLS_SWITCH_INFO, cl);
-            
-            // 构造 MapSwitchingInfo(int from, int to) -> 从 0 切到 4
             Object switchObj = XposedHelpers.newInstance(switchCls, 0, 4);
-            
             Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
-            Object msg = XposedHelpers.newInstance(wrapCls, 0x7d7, switchObj); // 0x7d7 = Switch
+            Object msg = XposedHelpers.newInstance(wrapCls, 0x7d7, switchObj);
             XposedHelpers.callMethod(bus, "a", msg);
             sendAppLog(ctx, "已发送 MapSwitchingInfo (0->4)");
-        } catch (Throwable e) {
-            // 如果类不存在，也不要崩溃，继续后面的流程
-            // sendAppLog(ctx, "SwitchingInfo 发送跳过: " + e.getMessage());
-        }
+        } catch (Throwable e) {}
     }
 
     private void sendData(ClassLoader cl, int statusValue, int vendor, Context ctx) {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
             Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-            
-            // 只用构造函数传参 (专家建议去掉 setMapVendor 以防万一)
             Object infoObj = XposedHelpers.newInstance(infoCls, vendor);
+            try { XposedHelpers.callMethod(infoObj, "setMapVendor", vendor); } catch(Throwable t){}
             XposedHelpers.callMethod(infoObj, "setStatus", statusValue);
-            
             Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
             Object msg = XposedHelpers.newInstance(wrapCls, 0x7d2, infoObj);
             XposedHelpers.callMethod(bus, "a", msg);
@@ -184,13 +159,11 @@ public class MainHook implements IXposedHookLoadPackage {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
             Class<?> guideCls = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
             Object gObj = XposedHelpers.newInstance(guideCls, 4);
-            
             XposedHelpers.callMethod(gObj, "setGuideType", 2);
             XposedHelpers.callMethod(gObj, "setTurnId", 2);
-            XposedHelpers.callMethod(gObj, "setCurRoadName", "成功大道");
-            XposedHelpers.callMethod(gObj, "setNextRoadName", "胜利街");
+            XposedHelpers.callMethod(gObj, "setCurRoadName", "测试路");
+            XposedHelpers.callMethod(gObj, "setNextRoadName", "IPC监控中");
             XposedHelpers.callMethod(gObj, "setNextTurnDistance", 500);
-            
             Class<?> wrapCls = XposedHelpers.findClass(CLS_WRAPPER, cl);
             Object msg = XposedHelpers.newInstance(wrapCls, 0x7d0, gObj);
             XposedHelpers.callMethod(bus, "a", msg);
@@ -199,18 +172,23 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void startOfficialService(Context ctx) {
         try {
+            // 1. 启动服务
             Intent intent = new Intent();
             intent.setComponent(new ComponentName("ecarx.naviservice", "ecarx.naviservice.service.NaviService"));
             intent.setAction("ecarx.intent.action.NAVI_SERVICE_STARTED");
             intent.addCategory("ecarx.intent.category.NAVI_INNER");
             ctx.startService(intent);
             
-            // 延时加大到 3 秒
+            // 2. 关键：尝试手动查找并触发 AutoWidgetManager 的连接 (l.smali)
+            // 如果系统不自动连，我们试图用代码去触发它 (这是一个盲测尝试)
+            // 稍后在日志里看 "系统尝试连接" 是否出现
+            
+            // 3. 延时补发广播
             new Thread(() -> {
                 try {
                     Thread.sleep(3000); 
                     ctx.sendBroadcast(new Intent("ecarx.intent.action.MAP_OPEN"));
-                    sendAppLog(ctx, "MAP_OPEN 广播已补发");
+                    sendAppLog(ctx, "MAP_OPEN 已发送 (等待IPC连接)");
                     
                     Thread.sleep(500);
                     Intent vIntent = new Intent("com.ecarx.naviservice.action.MAP_VENDOR_CHANGE");
@@ -219,7 +197,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Exception e) {}
             }).start();
             
-            sendAppLog(ctx, "冷启动执行中 (延时3秒等待初始化)...");
+            sendAppLog(ctx, "冷启动执行中...");
         } catch (Exception e) { sendAppLog(ctx, "Start Err: " + e.getMessage()); }
     }
 
@@ -234,4 +212,4 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {}
     }
-}
+                }
