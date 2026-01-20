@@ -11,24 +11,25 @@
         android:layout_height="wrap_content"
         android:background="#222222"
         android:padding="6dp">
-        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP: ❌" android:textColor="#FF0000" android:gravity="center" android:textSize="11sp"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入: ❌" android:textColor="#FF0000" android:gravity="center" android:textSize="11sp"/>
-        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务: ❌" android:textColor="#FF0000" android:gravity="center" android:textSize="11sp"/>
+        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路IPC" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
     </LinearLayout>
 
     <Button 
         android:id="@+id/btn_start_service" 
         android:layout_width="match_parent" 
-        android:layout_height="50dp" 
-        android:text="⚡ 1. 强制冷启动服务" 
+        android:layout_height="55dp" 
+        android:text="⚡ 1. 全套冷启动 (启动+广播+伪装)" 
         android:backgroundTint="#0288D1" 
         android:layout_marginTop="8dp"/>
 
     <Button 
         android:id="@+id/btn_activate" 
         android:layout_width="match_parent" 
-        android:layout_height="50dp" 
-        android:text="🚀 2. 激活仪表 (13 &amp; 25)" 
+        android:layout_height="55dp" 
+        android:text="🚀 2. 激活仪表 (Vendor 4)" 
         android:backgroundTint="#009688" 
         android:layout_marginTop="5dp"/>
 
@@ -37,13 +38,11 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:layout_marginTop="5dp">
-        <Button android:id="@+id/btn_start_cruise" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1" android:text="🛳️ 开启巡航(28)" android:backgroundTint="#FF5722" android:layout_marginEnd="2dp"/>
-        <Button android:id="@+id/btn_stop_cruise" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1" android:text="🛑 停止(29)" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
+        <Button android:id="@+id/btn_start_cruise" android:layout_width="0dp" android:layout_height="55dp" android:layout_weight="1" android:text="🛳️ 开启巡航" android:backgroundTint="#FF5722" android:layout_marginEnd="2dp"/>
+        <Button android:id="@+id/btn_stop_cruise" android:layout_width="0dp" android:layout_height="55dp" android:layout_weight="1" android:text="🛑 停止" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
     </LinearLayout>
 
-    <Button android:id="@+id/btn_save_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="💾 保存日志" android:backgroundTint="#444444" android:layout_marginTop="5dp"/>
-
     <ScrollView android:id="@+id/scrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="8dp" android:background="#111111">
-        <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 日志区域 ---\n"/>
+        <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 等待指令 ---\n"/>
     </ScrollView>
 </LinearLayout>
