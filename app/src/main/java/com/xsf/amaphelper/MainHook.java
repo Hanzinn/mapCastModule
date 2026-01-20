@@ -27,7 +27,6 @@ public class MainHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // Hook 自身
         if (lpparam.packageName.equals(PKG_SELF)) {
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, 
                 "isModuleActive", XC_MethodReplacement.returnConstant(true));
@@ -36,29 +35,28 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_XSF)) return;
 
-        // 1. Hook Application (为了注册广播接收器)
+        // 1. Hook Application: 证明注入成功 (原来那个勾)
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context context = (Context) param.thisObject;
-                sendAppLog(context, "✅ 模块挂载成功");
+                // 发送暗号 HOOK_READY
+                sendAppLog(context, "STATUS_HOOK_READY | 模块已挂载"); 
                 registerReceiver(context, lpparam.classLoader);
             }
         });
 
-        // 2. 🔴 核心反馈：Hook 服务启动，证明服务真的活了！
+        // 2. Hook Service: 证明服务跑起来了 (新的勾)
         try {
             XposedHelpers.findAndHookMethod(CLS_SERVICE, lpparam.classLoader, "onStartCommand", Intent.class, int.class, int.class, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Service service = (Service) param.thisObject;
-                    // 发送特殊暗号，让APP变绿
-                    sendAppLog(service, "NAVI_SERVICE_RUNNING"); 
+                    // 发送暗号 SERVICE_RUNNING
+                    sendAppLog(service, "STATUS_SERVICE_RUNNING | 服务已响应"); 
                 }
             });
-        } catch (Throwable t) {
-            // 忽略错误，防止服务类名不对导致崩溃
-        }
+        } catch (Throwable t) {}
     }
 
     private void registerReceiver(Context context, ClassLoader cl) {
@@ -67,18 +65,15 @@ public class MainHook implements IXposedHookLoadPackage {
             public void onReceive(Context ctx, Intent intent) {
                 String action = intent.getAction();
                 
-                // 1. 启动服务 (APP发出的请求)
                 if ("XSF_ACTION_START_SERVICE".equals(action)) {
                     startOfficialService(ctx);
                 } 
-                
-                // 2. 发送状态
                 else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                     int status = intent.getIntExtra("status", 0);
                     
                     if (status == 13) {
-                        // 常规激活：同时发 13 和 25，双保险
-                        sendAppLog(ctx, "⚡ 执行常规激活 (发送 13 & 25)");
+                        // 常规激活：双保险
+                        sendAppLog(ctx, "⚡ 常规激活 (13 & 25)");
                         sendStatus(cl, 13, ctx);
                         new Thread(()->{
                             try{Thread.sleep(300);}catch(Exception e){}
@@ -87,17 +82,16 @@ public class MainHook implements IXposedHookLoadPackage {
                     } 
                     else if (status == 28) {
                         // 官方巡航
-                        sendAppLog(ctx, "🚀 执行官方巡航 (Status 28)");
+                        sendAppLog(ctx, "🚀 开启巡航 (28)");
                         sendStatus(cl, 28, ctx); 
-                        // 紧接着发路口数据，模仿官方逻辑
                         new Thread(()->{
                             try{Thread.sleep(200);}catch(Exception e){}
                             sendOfficialGuide(cl, ctx); 
                         }).start();
                     } 
                     else {
-                        // 其他状态 (停止等)
                         sendStatus(cl, status, ctx);
+                        if(status == 29) sendAppLog(ctx, "🛑 停止巡航 (29)");
                     }
                 }
             }
@@ -115,9 +109,9 @@ public class MainHook implements IXposedHookLoadPackage {
             intent.setAction("ecarx.intent.action.NAVI_SERVICE_STARTED");
             intent.addCategory("ecarx.intent.category.NAVI_INNER");
             ctx.startService(intent);
-            sendAppLog(ctx, "⚡ 已发送启动广播，等待服务响应...");
+            sendAppLog(ctx, "已发送启动广播...");
         } catch (Exception e) {
-            sendAppLog(ctx, "❌ 启动服务失败: " + e.getMessage());
+            sendAppLog(ctx, "启动服务失败: " + e.getMessage());
         }
     }
 
@@ -125,40 +119,31 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
             Class<?> infoCls = XposedHelpers.findClass(CLS_STATUS_INFO, cl);
-            
-            // 尝试构造参数 1 和 2 (对应 mMapVendor)
-            int[] vendors = {1, 2};
-            boolean sent = false;
-            
+            int[] vendors = {1, 2}; // 容错
             for (int v : vendors) {
                 try {
                     Object infoObj = XposedHelpers.newInstance(infoCls, v);
                     XposedHelpers.callMethod(infoObj, "setStatus", statusValue);
                     Object msg = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WRAPPER, cl), 0x7d2, infoObj);
                     XposedHelpers.callMethod(bus, "a", msg);
-                    sent = true;
                 } catch (Throwable t) {}
             }
-            if(sent) sendAppLog(ctx, "状态 " + statusValue + " 已送入总线");
-            
-        } catch (Exception e) { sendAppLog(ctx, "❌ 发送报错: " + e.getMessage()); }
+        } catch (Exception e) { sendAppLog(ctx, "Err: " + e.getMessage()); }
     }
 
     private void sendOfficialGuide(ClassLoader cl, Context ctx) {
         try {
             Object bus = XposedHelpers.callStaticMethod(XposedHelpers.findClass(CLS_BUS, cl), "a");
             Class<?> guideCls = XposedHelpers.findClass(CLS_GUIDE_INFO, cl);
-            
             int[] vendors = {1, 2};
             for (int v : vendors) {
                 try {
                     Object gObj = XposedHelpers.newInstance(guideCls, v);
                     XposedHelpers.callMethod(gObj, "setGuideType", 2);
                     XposedHelpers.callMethod(gObj, "setTurnId", 0x66);
-                    XposedHelpers.callMethod(gObj, "setCurRoadName", "巡航中");
-                    XposedHelpers.callMethod(gObj, "setNextRoadName", "调试模式");
-                    XposedHelpers.callMethod(gObj, "setNextTurnDistance", 888);
-                    
+                    XposedHelpers.callMethod(gObj, "setCurRoadName", "巡航模式");
+                    XposedHelpers.callMethod(gObj, "setNextRoadName", "测试中");
+                    XposedHelpers.callMethod(gObj, "setNextTurnDistance", 800);
                     Object msg = XposedHelpers.newInstance(XposedHelpers.findClass(CLS_WRAPPER, cl), 0x7d0, gObj);
                     XposedHelpers.callMethod(bus, "a", msg);
                 } catch (Throwable t) {}
