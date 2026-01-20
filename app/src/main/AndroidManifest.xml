@@ -7,7 +7,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="投屏助手(容错增强版)"
+        android:label="投屏助手(Vendor4版)"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Black.NoTitleBar"
         android:requestLegacyExternalStorage="true">
@@ -20,7 +20,7 @@
         </activity>
 
         <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription" android:value="投屏核心功能测试" />
+        <meta-data android:name="xposeddescription" android:value="锁定Vendor 4并冷启动服务" />
         <meta-data android:name="xposedminversion" android:value="54" />
     </application>
 </manifest>
