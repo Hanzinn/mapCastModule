@@ -20,16 +20,24 @@
     <Button 
         android:id="@+id/btn_start_service" 
         android:layout_width="match_parent" 
-        android:layout_height="55dp" 
-        android:text="⚡ 1. 全套冷启动 (启动+广播+伪装)" 
+        android:layout_height="50dp" 
+        android:text="⚡ 1. 冷启动服务 (自动看门狗)" 
         android:backgroundTint="#0288D1" 
-        android:layout_marginTop="8dp"/>
+        android:layout_marginTop="5dp"/>
+    
+    <Button 
+        android:id="@+id/btn_force_connect" 
+        android:layout_width="match_parent" 
+        android:layout_height="50dp" 
+        android:text="🛠️ 2. 手动B计划 (Switch+暴力连)" 
+        android:backgroundTint="#D81B60" 
+        android:layout_marginTop="5dp"/>
 
     <Button 
         android:id="@+id/btn_activate" 
         android:layout_width="match_parent" 
-        android:layout_height="55dp" 
-        android:text="🚀 2. 激活仪表 (Vendor 4)" 
+        android:layout_height="50dp" 
+        android:text="🚀 3. 激活仪表 (V4)" 
         android:backgroundTint="#009688" 
         android:layout_marginTop="5dp"/>
 
@@ -38,11 +46,19 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:layout_marginTop="5dp">
-        <Button android:id="@+id/btn_start_cruise" android:layout_width="0dp" android:layout_height="55dp" android:layout_weight="1" android:text="🛳️ 开启巡航" android:backgroundTint="#FF5722" android:layout_marginEnd="2dp"/>
-        <Button android:id="@+id/btn_stop_cruise" android:layout_width="0dp" android:layout_height="55dp" android:layout_weight="1" android:text="🛑 停止" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
+        <Button android:id="@+id/btn_start_cruise" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1" android:text="🛳️ 巡航" android:backgroundTint="#FF5722" android:layout_marginEnd="2dp"/>
+        <Button android:id="@+id/btn_stop_cruise" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1" android:text="🛑 停止" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
     </LinearLayout>
 
-    <ScrollView android:id="@+id/scrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="8dp" android:background="#111111">
-        <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 等待指令 ---\n"/>
+    <Button 
+        android:id="@+id/btn_save_log" 
+        android:layout_width="match_parent" 
+        android:layout_height="40dp" 
+        android:text="💾 保存日志" 
+        android:backgroundTint="#444444" 
+        android:layout_marginTop="5dp"/>
+
+    <ScrollView android:id="@+id/scrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="5dp" android:background="#111111">
+        <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 系统就绪 ---\n"/>
     </ScrollView>
 </LinearLayout>
