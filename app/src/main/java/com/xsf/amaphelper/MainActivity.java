@@ -22,10 +22,12 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     
-    private TextView tvLog, tvLspStatus, tvServiceStatus;
+    // 三个状态文本
+    private TextView tvLog, tvLspStatus, tvHookStatus, tvServiceStatus;
     private ScrollView scrollView;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
+    // 自身激活检测
     public boolean isModuleActive() { return false; }
 
     private BroadcastReceiver logReceiver = new BroadcastReceiver() {
@@ -34,12 +36,21 @@ public class MainActivity extends Activity {
             String content = intent.getStringExtra("log");
             if (content == null) return;
             
-            // 🟢 核心反馈：收到服务启动成功的信号
-            if (content.contains("NAVI_SERVICE_RUNNING")) {
-                tvServiceStatus.setText("目标服务: 已运行 ✅");
+            // 🟡 状态更新逻辑
+            if (content.contains("HOOK_READY")) {
+                // 只要模块加载进去了，这个就会亮 (原来那个勾)
+                tvHookStatus.setText("注入: 已挂载 ✅");
+                tvHookStatus.setTextColor(Color.GREEN);
+            } 
+            else if (content.contains("SERVICE_RUNNING")) {
+                // 只有服务真正跑起来，这个才会亮
+                tvServiceStatus.setText("服务: 运行中 ✅");
                 tvServiceStatus.setTextColor(Color.GREEN);
-                logLocal("收到反馈：NaviService 正在运行！");
-            } else {
+                logLocal(">>> 目标服务已响应，可以发送指令了 <<<");
+            }
+
+            // 过滤掉暗号，只显示有意义的日志
+            if (!content.startsWith("STATUS_")) {
                 logLocal("模块: " + content);
             }
         }
@@ -53,38 +64,34 @@ public class MainActivity extends Activity {
 
         tvLog = findViewById(R.id.tv_log);
         tvLspStatus = findViewById(R.id.tv_lsp_status);
+        tvHookStatus = findViewById(R.id.tv_hook_status);
         tvServiceStatus = findViewById(R.id.tv_service_status);
         scrollView = findViewById(R.id.scrollView);
 
         registerReceiver(logReceiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
-        // 按钮1：启动服务
+        // 按钮逻辑
         findViewById(R.id.btn_start_service).setOnClickListener(v -> {
-            logLocal("发送启动指令... (请等待右上角变绿)");
+            logLocal("正在请求冷启动服务...");
             sendBroadcast(new Intent("XSF_ACTION_START_SERVICE"));
         });
 
-        // 按钮2：常规激活 (13/25)
         findViewById(R.id.btn_activate).setOnClickListener(v -> {
-            if (!isServiceRunningCheck()) return;
-            logLocal("尝试: 常规激活 (发送 13 和 25)");
+            logLocal("发送: 常规激活 (13/25)");
             Intent i = new Intent("XSF_ACTION_SEND_STATUS");
-            i.putExtra("status", 13); // 这里的逻辑在模块里处理，会同时发13和25
+            i.putExtra("status", 13);
             sendBroadcast(i);
         });
 
-        // 按钮3：官方巡航 (28)
         findViewById(R.id.btn_start_cruise).setOnClickListener(v -> {
-            if (!isServiceRunningCheck()) return;
-            logLocal("尝试: 官方巡航 (发送 28)");
+            logLocal("发送: 开启巡航 (28)");
             Intent i = new Intent("XSF_ACTION_SEND_STATUS");
             i.putExtra("status", 28);
             sendBroadcast(i);
         });
 
-        // 停止
         findViewById(R.id.btn_stop_cruise).setOnClickListener(v -> {
-            logLocal("尝试: 停止 (发送 29)");
+            logLocal("发送: 停止巡航 (29)");
             Intent i = new Intent("XSF_ACTION_SEND_STATUS");
             i.putExtra("status", 29);
             sendBroadcast(i);
@@ -97,14 +104,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean isServiceRunningCheck() {
-        // 只是一个简单的UI提示，不强制拦截，防止误判
-        if (tvServiceStatus.getText().toString().contains("未运行")) {
-            Toast.makeText(this, "建议先点击步骤1启动服务", Toast.LENGTH_SHORT).show();
-        }
-        return true;
-    }
-
     private void logLocal(String msg) {
         runOnUiThread(() -> {
             tvLog.append("[" + sdf.format(new Date()) + "] " + msg + "\n");
@@ -115,19 +114,19 @@ public class MainActivity extends Activity {
     private void saveToDownload() {
         try {
             File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            String name = "XSF_FullTest_" + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
+            String name = "XSF_TestLog_" + new SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(new Date()) + ".txt";
             File file = new File(path, name);
             FileOutputStream fos = new FileOutputStream(file);
             fos.write(tvLog.getText().toString().getBytes());
             fos.close();
-            Toast.makeText(this, "✅ 已存至 Download/" + name, Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "✅ 已保存: " + name, Toast.LENGTH_SHORT).show();
         } catch (Exception e) { Toast.makeText(this, "保存失败", Toast.LENGTH_SHORT).show(); }
     }
 
     @Override protected void onResume() {
         super.onResume();
         boolean active = isModuleActive();
-        tvLspStatus.setText(active ? "LSPosed: 已激活 ✅" : "LSPosed: 未激活 ❌");
+        tvLspStatus.setText(active ? "LSP: 已激活 ✅" : "LSP: 未激活 ❌");
         tvLspStatus.setTextColor(active ? Color.GREEN : Color.RED);
     }
 }
