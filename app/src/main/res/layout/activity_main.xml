@@ -4,61 +4,131 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#000000"
-    android:padding="8dp">
+    android:padding="6dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#222222"
-        android:padding="6dp">
-        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路IPC" android:textColor="#FF0000" android:gravity="center" android:textSize="10sp" android:textStyle="bold"/>
+        android:padding="6dp"
+        android:layout_marginBottom="6dp">
+        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路" android:textColor="#FF0000" android:gravity="center" android:textSize="12sp" android:textStyle="bold"/>
     </LinearLayout>
-
-    <Button 
-        android:id="@+id/btn_start_service" 
-        android:layout_width="match_parent" 
-        android:layout_height="50dp" 
-        android:text="⚡ 1. 冷启动服务 (自动看门狗)" 
-        android:backgroundTint="#0288D1" 
-        android:layout_marginTop="5dp"/>
-    
-    <Button 
-        android:id="@+id/btn_force_connect" 
-        android:layout_width="match_parent" 
-        android:layout_height="50dp" 
-        android:text="🛠️ 2. 手动B计划 (Switch+暴力连)" 
-        android:backgroundTint="#D81B60" 
-        android:layout_marginTop="5dp"/>
-
-    <Button 
-        android:id="@+id/btn_activate" 
-        android:layout_width="match_parent" 
-        android:layout_height="50dp" 
-        android:text="🚀 3. 激活仪表 (V4)" 
-        android:backgroundTint="#009688" 
-        android:layout_marginTop="5dp"/>
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:layout_marginTop="5dp">
-        <Button android:id="@+id/btn_start_cruise" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1" android:text="🛳️ 巡航" android:backgroundTint="#FF5722" android:layout_marginEnd="2dp"/>
-        <Button android:id="@+id/btn_stop_cruise" android:layout_width="0dp" android:layout_height="50dp" android:layout_weight="1" android:text="🛑 停止" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
+        android:baselineAligned="false">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.35"
+            android:orientation="vertical"
+            android:paddingEnd="6dp">
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="基础控制" android:textColor="#888888" android:textSize="10sp" android:gravity="center_horizontal" android:layout_marginBottom="2dp"/>
+            
+            <Button 
+                android:id="@+id/btn_start_service" 
+                android:layout_width="match_parent" 
+                android:layout_height="45dp" 
+                android:text="1.冷启动服务" 
+                android:textSize="13sp"
+                android:backgroundTint="#0288D1" 
+                android:layout_marginBottom="4dp"/>
+            
+            <Button 
+                android:id="@+id/btn_force_connect" 
+                android:layout_width="match_parent" 
+                android:layout_height="45dp" 
+                android:text="2.暴力重连" 
+                android:textSize="13sp"
+                android:backgroundTint="#D81B60" 
+                android:layout_marginBottom="10dp"/>
+
+            <Button 
+                android:id="@+id/btn_activate" 
+                android:layout_width="match_parent" 
+                android:layout_height="55dp" 
+                android:text="🚀 3. 激活仪表" 
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:backgroundTint="#009688" 
+                android:layout_marginBottom="10dp"/>
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="身份轮询控制 (Vendor)" android:textColor="#888888" android:textSize="10sp" android:gravity="center_horizontal" android:layout_marginBottom="2dp"/>
+            
+            <Button 
+                android:id="@+id/btn_vendor_auto" 
+                android:layout_width="match_parent" 
+                android:layout_height="40dp" 
+                android:text="🔄 自动轮询 (推荐)" 
+                android:textSize="12sp"
+                android:backgroundTint="#673AB7" 
+                android:layout_marginBottom="4dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                
+                <Button 
+                    android:id="@+id/btn_vendor_1" 
+                    android:layout_width="0dp" 
+                    android:layout_height="40dp" 
+                    android:layout_weight="1" 
+                    android:text="🔒 锁 V1" 
+                    android:textSize="12sp"
+                    android:backgroundTint="#555555" 
+                    android:layout_marginEnd="2dp"/>
+
+                <Button 
+                    android:id="@+id/btn_vendor_4" 
+                    android:layout_width="0dp" 
+                    android:layout_height="40dp" 
+                    android:layout_weight="1" 
+                    android:text="🔒 锁 V4" 
+                    android:textSize="12sp"
+                    android:backgroundTint="#555555" 
+                    android:layout_marginStart="2dp"/>
+            </LinearLayout>
+
+            <android.widget.Space android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+            
+            <Button 
+                android:id="@+id/btn_save_log" 
+                android:layout_width="match_parent" 
+                android:layout_height="40dp" 
+                android:text="💾 保存日志" 
+                android:textSize="12sp"
+                android:backgroundTint="#444444"/>
+
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/scrollView"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.65"
+            android:background="#111111"
+            android:fillViewport="true">
+            
+            <TextView 
+                android:id="@+id/tv_log" 
+                android:layout_width="match_parent" 
+                android:layout_height="wrap_content" 
+                android:textColor="#00FF00" 
+                android:padding="10dp" 
+                android:textSize="12sp" 
+                android:lineSpacingExtra="3dp"
+                android:fontFamily="monospace" 
+                android:text="--- 系统就绪 (Layout V45) ---\n"/>
+        </ScrollView>
+
     </LinearLayout>
-
-    <Button 
-        android:id="@+id/btn_save_log" 
-        android:layout_width="match_parent" 
-        android:layout_height="40dp" 
-        android:text="💾 保存日志" 
-        android:backgroundTint="#444444" 
-        android:layout_marginTop="5dp"/>
-
-    <ScrollView android:id="@+id/scrollView" android:layout_width="match_parent" android:layout_height="match_parent" android:layout_marginTop="5dp" android:background="#111111">
-        <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#00FF00" android:padding="8dp" android:textSize="11sp" android:fontFamily="monospace" android:text="--- 系统就绪 ---\n"/>
-    </ScrollView>
 </LinearLayout>
