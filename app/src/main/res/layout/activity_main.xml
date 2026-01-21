@@ -12,10 +12,10 @@
         android:background="#222222"
         android:padding="15dp"
         android:layout_marginBottom="8dp">
-        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="20sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入" android:textColor="#FF0000" android:gravity="center" android:textSize="20sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务" android:textColor="#FF0000" android:gravity="center" android:textSize="20sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路" android:textColor="#FF0000" android:gravity="center" android:textSize="20sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
     </LinearLayout>
 
     <LinearLayout
