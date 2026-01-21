@@ -7,11 +7,9 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.os.Binder; 
 import android.os.Bundle;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -21,15 +19,12 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_WIDGET = "com.ecarx.naviwidget";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // 东软 SDK 接口
-    private static final String CLS_OPEN_API = "com.neusoft.nts.ecarxnavsdk.EcarxOpenApi";
-    private static final String CLS_CALLBACK_GUIDE = "com.neusoft.nts.ecarxnavsdk.IAPIGetGuideInfoCallBack";
-    
+    // 权限 (Manifest)
     private static final String PERMISSION_NAVI = "ecarx.oem.permission.OPENAPI_NAVI_PERMISSION";
 
     private static Context mServiceContext = null;
-    private static boolean isHeartbeatRunning = false;
-    private static boolean isReceiverRegistered = false;
+    // 注意：这个变量在不同进程是不共享的！
+    private static boolean isHeartbeatRunning = false; 
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -38,74 +33,70 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        // 1. Hook NaviService (宿主 & 握手发射源)
+        // 1. Hook NaviService (宿主 & 发射源)
         if (lpparam.packageName.equals(PKG_SERVICE)) {
             initNaviServiceHook(lpparam);
         }
 
         // 2. Hook NaviWidget (显示端)
-        // 🔴 关键修正：不再Hook MapTextureView的静态变量，防止崩溃！
         if (lpparam.packageName.equals(PKG_WIDGET)) {
-            // 只做简单的 Activity 监听，不做危险操作
-            initNaviWidgetSafeHook(lpparam);
+            XposedBridge.log("NaviHook: 已注入 NaviWidget 进程");
+            // 🔴 核心修复：直接开启劫持，不依赖 Service 进程的状态
+            hookEcarxOpenApi(lpparam);
+            // 监听 Activity 启动
+            initNaviWidgetActivityHook(lpparam);
         }
-        
-        // 3. 🌟 全局劫持 EcarxOpenApi (无论在哪个进程)
-        // 这是让仪表盘获取数据的唯一途径（因为它主动拉取）
-        hookEcarxOpenApi(lpparam);
     }
 
     // ===========================
-    // 🗡️ 核心: API 劫持 (数据源头欺骗)
+    // 🗡️ API 劫持 (核心数据源 - V38修复版)
     // ===========================
     private void hookEcarxOpenApi(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            Class<?> apiClass = XposedHelpers.findClass(CLS_OPEN_API, lpparam.classLoader);
+            Class<?> apiClass = XposedHelpers.findClass("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
+            Class<?> callbackClass = XposedHelpers.findClass("com.neusoft.nts.ecarxnavsdk.IAPIGetGuideInfoCallBack", lpparam.classLoader);
             
-            // 拦截 getGuideInfo
-            XposedHelpers.findAndHookMethod(apiClass, "getGuideInfo", CLS_CALLBACK_GUIDE, new XC_MethodHook() {
+            // 拦截查询接口
+            XposedHelpers.findAndHookMethod(apiClass, "getGuideInfo", callbackClass, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    // 只要心跳在跳，就劫持。不要犹豫。
-                    if (!isHeartbeatRunning) return; 
-
-                    XposedBridge.log("NaviHook: 拦截到 getGuideInfo，开始注入 V36 数据...");
+                    // 🔴 V38 关键修改：移除 isHeartbeatRunning 检查！
+                    // 因为在 Widget 进程里这个变量永远是 false，导致之前无法注入数据。
+                    // 现在只要组件来问，我们无条件注入！
+                    
+                    XposedBridge.log("NaviHook: [Widget进程] 拦截到 getGuideInfo，正在注入 V38 数据...");
                     
                     Object callback = param.args[0];
                     if (callback != null) {
                         // 17参数全量注入 (参考 Smali)
                         XposedHelpers.callMethod(callback, "getGuideInfoResult",
-                            1, // type (1=Turn)
-                            1000, // route_remain_dis
-                            600, // route_remain_time
-                            0, // camera_dist
-                            0, // camera_type
-                            0, // camera_speed
-                            "V36安全版", // road_name
-                            "V36安全版", // next_road_name
+                            1, // type (1=转向)
+                            888, // remain_dis
+                            60, // remain_time
+                            0, 0, 0, // camera
+                            "V38无门槛", // road
+                            "V38无门槛", // next_road
                             0.5f, // progress
                             0, // nav_type
                             500, // distance
                             2, // icon (左转)
-                            "当前路名V36", // cur_road_name
-                            1000, // total_dist
-                            600, // total_time
-                            0, // unknown
-                            0 // unknown
+                            "当前路名V38", 
+                            888, 60, 0, 0 // total & unknown
                         );
-                        // 阻止原方法，防止覆盖
-                        param.setResult(true);
+                        param.setResult(true); // 拦截原调用，防止覆盖
                     }
                 }
             });
-        } catch (Throwable t) {}
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook API Hook Err: " + t);
+        }
     }
 
     // ===========================
-    // 🧠 NaviService Hook (维稳)
+    // 🧠 NaviService Hook (负责发广播通知)
     // ===========================
     private void initNaviServiceHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 抢跑注入 (不死鸟)
+        // 抢跑注入 (修复灯灭)
         XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "attachBaseContext", Context.class, new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -113,14 +104,13 @@ public class MainHook implements IXposedHookLoadPackage {
                     mServiceContext = (Context) param.thisObject;
                     ensureReceiverRegistered(mServiceContext, lpparam.classLoader);
                     
-                    // 发送双重日志，确保 App 能收到
-                    sendAppLog(mServiceContext, "STATUS_HOOK_READY (V36-Safe)");
+                    // 显式日志
+                    sendAppLog(mServiceContext, "STATUS_HOOK_READY (V38-Fix)");
                     updateAppUIStatus(mServiceContext, 13);
                     
-                    // 尝试点亮 Matrix
+                    // 物理绿灯
                     keepAliveAndGreen(lpparam.classLoader, mServiceContext);
                     
-                    // 自动恢复心跳
                     if (!isHeartbeatRunning) {
                         handleStatusAction(lpparam.classLoader, mServiceContext, 13);
                     }
@@ -128,28 +118,73 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         });
         
-        // 生存补丁
         try { XposedHelpers.findAndHookMethod("ecarx.naviservice.d.y", lpparam.classLoader, "b", String.class, XC_MethodReplacement.returnConstant(70500)); } catch (Throwable t) {}
     }
 
     // ===========================
-    // 📺 NaviWidget 安全 Hook
+    // 📺 NaviWidget Activity Hook (只为了触发更新)
     // ===========================
-    private void initNaviWidgetSafeHook(XC_LoadPackage.LoadPackageParam lpparam) {
+    private void initNaviWidgetActivityHook(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            // 仅仅监听 Activity 启动，不做任何导致崩溃的操作
             XposedHelpers.findAndHookMethod("com.ecarx.naviwidget.DisplayInfoActivity", lpparam.classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    Context ctx = (Context) param.thisObject;
-                    sendAppLog(ctx, "📺 仪表 Activity 启动 (V36)");
-                    // Activity 启动时，发送一波握手信号
-                    sendHandshakeBroadcasts(ctx, 1); 
+                    // Activity 启动时，记录个日志
+                    XposedBridge.log("NaviHook: [Widget进程] 仪表 Activity 已启动");
                 }
             });
         } catch (Throwable t) {}
     }
 
+    // 🤝 发送广播通知 Widget 更新 (在 Service 进程执行)
+    private void sendUpdateBroadcasts(Context ctx, int count) {
+        try {
+            // 虽然我们劫持了 API，但发广播可以触发 Widget 主动去调用 API
+            
+            // 1. REFRESH_WIDGET
+            Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
+            iRefresh.setPackage(PKG_WIDGET);
+            ctx.sendBroadcast(iRefresh, PERMISSION_NAVI);
+            
+            // 2. UPDATE_STATUS (让它确信在导航中)
+            Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
+            iStatus.putExtra("status", 1); 
+            iStatus.putExtra("is_navi", true);
+            iStatus.putExtra("vendor", (count % 2 == 0) ? 1 : 4); // 轮询身份
+            iStatus.setPackage(PKG_WIDGET);
+            ctx.sendBroadcast(iStatus, PERMISSION_NAVI);
+
+        } catch (Throwable t) {}
+    }
+
+    private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
+        if (isHeartbeatRunning) return;
+        isHeartbeatRunning = true;
+        
+        new Thread(() -> {
+            sendAppLog(ctx, "💓 V38 无门槛引擎启动...");
+            int count = 0;
+            while (isHeartbeatRunning) {
+                try {
+                    // 物理维持
+                    if (count % 10 == 0) keepAliveAndGreen(cl, ctx);
+                    
+                    // 发送广播，刺激 Widget 去调用 getGuideInfo
+                    sendUpdateBroadcasts(ctx, count);
+                    
+                    // 补发焦点
+                    Intent iFocus = new Intent("com.ecarx.intent.action.NAVI_FOCUS_GAIN");
+                    iFocus.putExtra("packageName", "com.autonavi.amapauto");
+                    ctx.sendBroadcast(iFocus, PERMISSION_NAVI);
+
+                    Thread.sleep(1500); 
+                    count++;
+                } catch (Exception e) { break; }
+            }
+        }).start();
+    }
+
+    // 辅助方法...
     private void ensureReceiverRegistered(Context ctx, ClassLoader cl) {
         if (isReceiverRegistered) return;
         try {
@@ -169,58 +204,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🤝 握手信号 (V35 逻辑保留)
-    private void sendHandshakeBroadcasts(Context ctx, int vendor) {
-        try {
-            // 1. 状态机激活 (Status=1, Route=0)
-            Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
-            iStatus.putExtra("status", 1);
-            iStatus.putExtra("is_navi", true);
-            iStatus.putExtra("vendor", vendor);
-            iStatus.putExtra("route_state", 0); 
-            ctx.sendBroadcast(iStatus, PERMISSION_NAVI);
-
-            // 2. 强制刷新 Widget (触发它去调用 getGuideInfo)
-            ctx.sendBroadcast(new Intent("ecarx.navi.REFRESH_WIDGET"), PERMISSION_NAVI);
-            
-            // 3. Surface 信号 (只发广播，不改代码)
-            Intent iSurface = new Intent("ecarx.navi.SURFACE_CHANGED");
-            iSurface.putExtra("isShow", true);
-            ctx.sendBroadcast(iSurface, PERMISSION_NAVI);
-
-        } catch (Throwable t) {}
-    }
-
-    private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
-        if (isHeartbeatRunning) return;
-        isHeartbeatRunning = true;
-        
-        new Thread(() -> {
-            sendAppLog(ctx, "💓 V36 安全劫持引擎启动...");
-            int count = 0;
-            while (isHeartbeatRunning) {
-                try {
-                    // 物理维持
-                    if (count % 5 == 0) keepAliveAndGreen(cl, ctx);
-                    
-                    // 🌟 轮询握手 (Vendor 1 & 4)
-                    // 我们不发 GUIDEINFO 广播了，因为我们已经劫持了 API
-                    // 我们只需要发握手信号，诱导仪表盘去调用 API
-                    int currentVendor = (count % 2 == 0) ? 1 : 4;
-                    sendHandshakeBroadcasts(ctx, currentVendor);
-                    
-                    // 补发焦点
-                    Intent iFocus = new Intent("com.ecarx.intent.action.NAVI_FOCUS_GAIN");
-                    iFocus.putExtra("packageName", "com.autonavi.amapauto");
-                    ctx.sendBroadcast(iFocus, PERMISSION_NAVI);
-
-                    Thread.sleep(1500); 
-                    count++;
-                } catch (Exception e) { break; }
-            }
-        }).start();
-    }
-
     private void keepAliveAndGreen(ClassLoader cl, Context ctx) {
         try {
             Class<?> q = XposedHelpers.findClass("q", cl);
@@ -236,16 +219,10 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🌟 双重广播：解决 App 灯不亮问题
     private void updateAppUIStatus(Context ctx, int status) {
         try {
             Intent i = new Intent("com.xsf.amaphelper.STATUS_UPDATE");
-            i.setPackage(PKG_SELF); // 显式
-            i.putExtra("status", status);
-            ctx.sendBroadcast(i);
-        } catch (Throwable t) {}
-        try {
-            Intent i = new Intent("com.xsf.amaphelper.STATUS_UPDATE"); // 隐式备用
+            i.setPackage(PKG_SELF);
             i.putExtra("status", status);
             ctx.sendBroadcast(i);
         } catch (Throwable t) {}
@@ -256,11 +233,6 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
             i.setPackage(PKG_SELF);
-            i.putExtra("log", log);
-            ctx.sendBroadcast(i);
-        } catch (Throwable t) {}
-        try {
-            Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
             i.putExtra("log", log);
             ctx.sendBroadcast(i);
         } catch (Throwable t) {}
