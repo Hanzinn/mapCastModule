@@ -7,8 +7,9 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.os.Environment; // 🟢 必须引入这个
+import android.os.Environment;
 import android.view.Window;
+import android.widget.Button;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -22,10 +23,11 @@ public class MainActivity extends Activity {
     
     // UI 控件
     private TextView tvLog, tvLsp, tvHook, tvSvc, tvIpc;
+    private Button btnAuto, btnV1, btnV4;
     private ScrollView scrollView;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
-    // 自身激活状态检测 (Xposed 会 Hook 这个方法返回 true)
+    // 自身激活状态检测
     public boolean isModuleActive() { return false; }
 
     // 广播接收器
@@ -35,7 +37,7 @@ public class MainActivity extends Activity {
             String log = intent.getStringExtra("log");
             if (log == null) return;
             
-            // 🟢 状态灯逻辑
+            // 状态灯逻辑
             if (log.contains("STATUS_HOOK_READY")) {
                 setStatus(tvHook, "注入: ✅");
             } 
@@ -46,7 +48,6 @@ public class MainActivity extends Activity {
                 setStatus(tvIpc, "链路IPC: ✅");
                 appendLog(">>> 🎉 物理链路已打通！ <<<");
             } 
-            // 📝 普通日志
             else {
                 appendLog("模块: " + log);
             }
@@ -72,46 +73,74 @@ public class MainActivity extends Activity {
         tvIpc = findViewById(R.id.tv_ipc_status);
         scrollView = findViewById(R.id.scrollView);
 
-        // 注册广播
+        btnAuto = findViewById(R.id.btn_vendor_auto);
+        btnV1 = findViewById(R.id.btn_vendor_1);
+        btnV4 = findViewById(R.id.btn_vendor_4);
+
         registerReceiver(receiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
-        // --- 按钮事件绑定 ---
+        // --- 按钮事件 ---
 
-        // 1. 冷启动服务
+        // 1. 冷启动
         findViewById(R.id.btn_start_service).setOnClickListener(v -> {
             tvSvc.setText("服务: ⏳"); tvSvc.setTextColor(Color.YELLOW);
-            tvIpc.setText("链路IPC: ⏳"); tvIpc.setTextColor(Color.YELLOW);
+            tvIpc.setText("链路: ⏳"); tvIpc.setTextColor(Color.YELLOW);
             appendLog("步骤1: 发送冷启动指令...");
             sendBroadcast(new Intent("XSF_ACTION_START_SERVICE"));
         });
 
-        // 2. 暴力重连 (B 计划)
+        // 2. 暴力重连
         findViewById(R.id.btn_force_connect).setOnClickListener(v -> {
-            appendLog("步骤2: 手动执行 B 计划 (Switch + 暴力连接)...");
+            appendLog("步骤2: 手动执行 B 计划...");
             sendBroadcast(new Intent("XSF_ACTION_FORCE_CONNECT"));
         });
 
         // 3. 激活仪表
         findViewById(R.id.btn_activate).setOnClickListener(v -> {
-            appendLog("步骤3: 发送激活连招...");
+            appendLog("步骤3: 发送激活连招 (含17参数注入)...");
             sendStatus(13); 
+            updateVendorButtonUI(-1); // 激活时重置为自动轮询
         });
 
-        // 巡航控制
-        findViewById(R.id.btn_start_cruise).setOnClickListener(v -> {
-            appendLog("发送: 巡航模式 (28)");
-            sendStatus(28);
+        // Vendor 控制
+        btnAuto.setOnClickListener(v -> {
+            sendVendorCmd(-1);
+            appendLog("指令: 切换为 [自动轮询] 模式");
+            updateVendorButtonUI(-1);
         });
 
-        findViewById(R.id.btn_stop_cruise).setOnClickListener(v -> {
-            appendLog("发送: 停止 (29)");
-            sendStatus(29);
+        btnV1.setOnClickListener(v -> {
+            sendVendorCmd(1);
+            appendLog("指令: 强制锁定 [Vendor 1]");
+            updateVendorButtonUI(1);
         });
 
-        // 💾 保存日志 (修改了路径)
+        btnV4.setOnClickListener(v -> {
+            sendVendorCmd(4);
+            appendLog("指令: 强制锁定 [Vendor 4]");
+            updateVendorButtonUI(4);
+        });
+
+        // 保存日志
         findViewById(R.id.btn_save_log).setOnClickListener(v -> {
             saveLogToFile();
         });
+    }
+
+    private void sendVendorCmd(int vendorId) {
+        Intent i = new Intent("XSF_ACTION_SET_VENDOR");
+        i.putExtra("vendor", vendorId);
+        sendBroadcast(i);
+    }
+
+    private void updateVendorButtonUI(int mode) {
+        int activeColor = Color.parseColor("#FF4081");
+        int normalColor = Color.parseColor("#555555");
+        int autoColor = Color.parseColor("#673AB7");
+
+        btnAuto.setBackgroundColor(mode == -1 ? activeColor : autoColor);
+        btnV1.setBackgroundColor(mode == 1 ? activeColor : normalColor);
+        btnV4.setBackgroundColor(mode == 4 ? activeColor : normalColor);
     }
 
     private void sendStatus(int s) {
@@ -120,27 +149,14 @@ public class MainActivity extends Activity {
         sendBroadcast(i);
     }
 
-    // 保存日志到文件 (路径已修改)
     private void saveLogToFile() {
         String logContent = tvLog.getText().toString();
-        if (logContent.isEmpty()) {
-            Toast.makeText(this, "日志为空，无需保存", Toast.LENGTH_SHORT).show();
-            return;
-        }
+        if (logContent.isEmpty()) return;
 
         try {
-            // 📂 修改路径：/sdcard/Download/AmapHelper_Logs/
             File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             File dir = new File(downloadDir, "AmapHelper_Logs");
-            
-            if (!dir.exists()) {
-                boolean created = dir.mkdirs();
-                if (!created) {
-                    // 如果 Download 创建失败，回退到根目录
-                    dir = new File(Environment.getExternalStorageDirectory(), "AmapHelper_Logs");
-                    dir.mkdirs();
-                }
-            }
+            if (!dir.exists()) dir.mkdirs();
 
             String fileName = "Log_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date()) + ".txt";
             File file = new File(dir, fileName);
@@ -149,13 +165,11 @@ public class MainActivity extends Activity {
             fos.write(logContent.getBytes());
             fos.close();
 
-            String msg = "日志已保存:\n" + file.getAbsolutePath();
-            Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
-            appendLog("✅ " + msg);
+            Toast.makeText(this, "日志已保存: " + file.getName(), Toast.LENGTH_SHORT).show();
+            appendLog("✅ 日志已保存: " + file.getAbsolutePath());
 
         } catch (Exception e) {
             appendLog("❌ 保存失败: " + e.getMessage());
-            Toast.makeText(this, "保存失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
