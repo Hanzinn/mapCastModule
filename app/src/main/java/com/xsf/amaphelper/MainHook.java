@@ -1,14 +1,14 @@
 package com.xsf.amaphelper;
 
 import android.app.Application;
+import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Binder; 
 import android.os.Bundle;
-import android.os.IBinder; 
-import java.lang.reflect.Method;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -18,244 +18,231 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SERVICE = "ecarx.naviservice";
-    private static final String PKG_WIDGET = "com.ecarx.naviwidget"; // 🎯 新增目标
+    private static final String PKG_WIDGET = "com.ecarx.naviwidget";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // --- Service 混淆类 ---
-    private static final String CLS_PROTOCOL_FACTORY = "j"; 
-    private static final String CLS_PROTOCOL_MGR = "g"; 
-    private static final String CLS_WIDGET_MGR_HOLDER = "q"; 
-    private static final String CLS_WIDGET_MGR = "l"; 
-    private static final String CLS_WIDGET_CONNECTION = "o";
-    private static final String CLS_VERSION_UTIL = "y"; 
-    
-    private static final String CLS_SERVICE = "ecarx.naviservice.service.NaviService";
-    private static final String CLS_NEUSOFT_SDK = "ecarx.naviservice.map.d.a"; 
-
-    // --- Widget 混淆类 ---
-    // 注意：这里的包名是 view，不是 widget
-    private static final String CLS_MAP_TEXTURE_VIEW = "com.ecarx.naviwidget.view.MapTextureView";
-
     private static Context mServiceContext = null;
     private static boolean isHeartbeatRunning = false;
+    private static boolean isReceiverRegistered = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // 0. 自身激活检测
         if (lpparam.packageName.equals(PKG_SELF)) {
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, "isModuleActive", XC_MethodReplacement.returnConstant(true));
             return;
         }
 
-        // 1. 处理 NaviService (逻辑大脑)
+        // 1. 处理 NaviService (广播源)
         if (lpparam.packageName.equals(PKG_SERVICE)) {
             initNaviServiceHook(lpparam);
         }
 
-        // 2. 处理 NaviWidget (显示终端) - 🌟 V29 新增
+        // 2. 处理 NaviWidget (显示端)
         if (lpparam.packageName.equals(PKG_WIDGET)) {
             initNaviWidgetHook(lpparam);
         }
     }
 
     // ===========================
-    // 📺 NaviWidget 端 Hook 逻辑 (直接操作 UI)
+    // 🧠 NaviService 端 Hook
+    // ===========================
+    private void initNaviServiceHook(XC_LoadPackage.LoadPackageParam lpparam) {
+        // 抢跑注入 (AttachBaseContext)
+        XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "attachBaseContext", Context.class, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                if ((param.thisObject instanceof Service) || (param.thisObject instanceof Application)) {
+                    mServiceContext = (Context) param.thisObject;
+                    sendAppLog(mServiceContext, "STATUS_HOOK_READY (V32-Final)");
+                    ensureReceiverRegistered(mServiceContext);
+                    
+                    // 物理层维持 (Matrix)
+                    keepAliveAndGreen(lpparam.classLoader, mServiceContext);
+                    
+                    // 自动恢复
+                    if (!isHeartbeatRunning) {
+                        handleStatusAction(lpparam.classLoader, mServiceContext, 13);
+                    }
+                }
+            }
+        });
+        
+        // 版本欺骗
+        try { XposedHelpers.findAndHookMethod("ecarx.naviservice.d.y", lpparam.classLoader, "b", String.class, XC_MethodReplacement.returnConstant(70500)); } catch (Throwable t) {}
+    }
+
+    // ===========================
+    // 📺 NaviWidget 端 Hook (双重锁定)
     // ===========================
     private void initNaviWidgetHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        XposedBridge.log("NaviHook: 注入 NaviWidget 成功");
-        
         try {
-            Class<?> mtvClass = XposedHelpers.findClass(CLS_MAP_TEXTURE_VIEW, lpparam.classLoader);
+            Class<?> mtvClass = XposedHelpers.findClass("com.ecarx.naviwidget.view.MapTextureView", lpparam.classLoader);
             
-            // 劫持 setSurfaceStatus(boolean)
+            // 1. 拦截 setSurfaceStatus 方法
             XposedHelpers.findAndHookMethod(mtvClass, "setSurfaceStatus", boolean.class, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    boolean original = (boolean) param.args[0];
-                    // 强制改为 true，告诉 View 打开 Surface
-                    param.args[0] = true;
-                    // 强制设置静态标记 c (mIsAddSurface) 为 true
-                    try { XposedHelpers.setStaticBooleanField(mtvClass, "c", true); } catch(Throwable t){}
+                    param.args[0] = true; // 强制传参 true
                     
-                    XposedBridge.log("NaviHook: 拦截 setSurfaceStatus(" + original + ") -> 强制改为 true");
+                    // 2. 🌟 强制修改静态字段 c (mIsAddSurface)
+                    // 这是 V32 的核心改进：直接修改内存中的开关
+                    try { 
+                        XposedHelpers.setStaticBooleanField(mtvClass, "c", true); 
+                    } catch(Throwable t) {
+                        XposedBridge.log("NaviHook: 静态字段 c 修改失败: " + t);
+                    }
+                    XposedBridge.log("NaviHook: MapTextureView 双重锁定已执行");
                 }
             });
             
-            // 可选：Hook onAttachedToWindow 确保初始化
-            XposedHelpers.findAndHookMethod(mtvClass, "onAttachedToWindow", new XC_MethodHook() {
+            // 监听 Activity 启动
+            XposedHelpers.findAndHookMethod("com.ecarx.naviwidget.DisplayInfoActivity", lpparam.classLoader, "onCreate", Bundle.class, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    XposedBridge.log("NaviHook: MapTextureView 已附加到窗口");
-                    // 这里可以尝试主动调用一次 private void a(int) 
-                    // 但由于混淆名不确定，暂时通过 setSurfaceStatus 触发
+                    sendAppLog((Context) param.thisObject, "📺 仪表 Activity 启动 (V32)");
                 }
             });
-
+            
         } catch (Throwable t) {
             XposedBridge.log("NaviHook Widget Error: " + t.getMessage());
         }
     }
 
-    // ===========================
-    // 🧠 NaviService 端 Hook 逻辑 (发送指令)
-    // ===========================
-    private void initNaviServiceHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 1. 注入反馈
-        XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                Context appCtx = (Context) param.thisObject;
-                sendAppLog(appCtx, "STATUS_HOOK_READY (V29-Surface)");
-                registerReceiver(appCtx, lpparam.classLoader);
-            }
-        });
-
-        // 2. Context 捕获
-        try {
-            XposedHelpers.findAndHookMethod(CLS_SERVICE, lpparam.classLoader, "onStartCommand", Intent.class, int.class, int.class, new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    mServiceContext = (Context) param.thisObject;
-                    sendAppLog(mServiceContext, "STATUS_SERVICE_RUNNING (Resumed)");
-                    if (!isHeartbeatRunning) {
-                        handleStatusAction(lpparam.classLoader, mServiceContext, 13);
-                    }
-                }
-            });
-        } catch (Throwable t) {}
-
-        // 3. 生存补丁
-        try { XposedHelpers.findAndHookMethod(CLS_VERSION_UTIL, lpparam.classLoader, "b", String.class, XC_MethodReplacement.returnConstant(70500)); } catch (Throwable t) {}
-
-        // 4. 心脏起搏
-        try {
-            XposedHelpers.findAndHookMethod(CLS_PROTOCOL_FACTORY, lpparam.classLoader, "a", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    Object inst = param.getResult();
-                    if (inst != null) XposedHelpers.setBooleanField(inst, "c", true);
-                }
-            });
-            XposedHelpers.findAndHookMethod(CLS_PROTOCOL_MGR, lpparam.classLoader, "f", XC_MethodReplacement.returnConstant(true));
-        } catch (Throwable t) {}
-    }
-
-    private void registerReceiver(Context context, ClassLoader cl) {
+    // 注册监听器
+    private void ensureReceiverRegistered(Context ctx) {
+        if (isReceiverRegistered) return;
         try {
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override
-                public void onReceive(Context ctx, Intent intent) {
-                    String action = intent.getAction();
-                    if ("XSF_ACTION_START_SERVICE".equals(action)) {
-                        sendAppLog(ctx, "Service运行中 (V29)");
-                    } 
-                    else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
-                        // V29: 手动触发一次强启广播
-                        sendSurfaceBroadcast(ctx);
-                        sendWidgetUpdateBroadcast(ctx, "V29手动测试", 100);
-                    }
-                    else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                        handleStatusAction(cl, ctx, intent.getIntExtra("status", 0));
-                    }
+                public void onReceive(Context context, Intent intent) {
+                    try {
+                        String action = intent.getAction();
+                        if ("XSF_ACTION_START_SERVICE".equals(action)) {
+                            launchNaviComponents(context);
+                        } 
+                        else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
+                            // 手动触发一次 V32 协议广播
+                            sendV32ProtocolBroadcasts(context, 0);
+                        }
+                        else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
+                            // 这里我们不再传递 classloader，因为广播发送不需要反射
+                            // 心跳逻辑直接使用 context
+                            startV32Heartbeat(context);
+                        }
+                    } catch (Throwable t) {}
                 }
             };
             IntentFilter filter = new IntentFilter();
             filter.addAction("XSF_ACTION_START_SERVICE");
             filter.addAction("XSF_ACTION_FORCE_CONNECT");
             filter.addAction("XSF_ACTION_SEND_STATUS");
-            context.getApplicationContext().registerReceiver(receiver, filter);
+            ctx.getApplicationContext().registerReceiver(receiver, filter);
+            isReceiverRegistered = true;
         } catch (Throwable t) {}
     }
 
-    // 📺 V29 关键: 发送 Surface 强启广播
-    private void sendSurfaceBroadcast(Context ctx) {
+    // 🚀 V32 核心: 17参数全对齐广播
+    private void sendV32ProtocolBroadcasts(Context ctx, int count) {
         try {
-            Context target = (mServiceContext != null) ? mServiceContext : ctx;
-            
-            // 目标: 触发 e.smali 中的 onMapSurfaceViewChanged 或 onLauncherStatusChange
-            Intent intent = new Intent("ecarx.navi.SURFACE_CHANGED");
-            // 穷举参数
-            intent.putExtra("isShow", true);
-            intent.putExtra("status", true);
-            intent.putExtra("visible", true);
-            
-            target.sendBroadcast(intent);
-            sendAppLog(ctx, "📺 Surface广播已发");
-        } catch (Throwable t) {}
-    }
-
-    // 📡 V29 关键: 发送 Widget 协议广播 (TBT数据)
-    private void sendWidgetUpdateBroadcast(Context ctx, String roadName, int distance) {
-        try {
-            Context target = (mServiceContext != null) ? mServiceContext : ctx;
-            
-            // 发送 UPDATE_GUIDEINFO (根据 Manifest)
-            Intent iGuide = new Intent("ecarx.navi.UPDATE_GUIDEINFO");
-            iGuide.putExtra("road_name", roadName);
-            iGuide.putExtra("next_road_name", roadName);
-            iGuide.putExtra("distance", distance);
-            iGuide.putExtra("icon", 2); // 左转
-            iGuide.putExtra("guide_type", 1); // Start
-            target.sendBroadcast(iGuide);
-            
-            // 发送 UPDATE_STATUS
+            // 1. 先发状态机预热：告诉仪表盘“路径已规划”
             Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
-            iStatus.putExtra("status", 1); 
+            iStatus.putExtra("status", 1); // 1 = 导航中
             iStatus.putExtra("is_navi", true);
-            target.sendBroadcast(iStatus);
+            iStatus.putExtra("vendor", 1); // 🌟 V32: 锁定 Vendor 1 (系统原生)
+            ctx.sendBroadcast(iStatus);
 
-            sendAppLog(ctx, "📡 Widget TBT广播已发");
+            // 2. 发送强制刷新指令
+            ctx.sendBroadcast(new Intent("ecarx.navi.REFRESH_WIDGET"));
+
+            // 3. 🌟 发送 17 参数全满的引导信息 (核心!)
+            Intent iGuide = new Intent("ecarx.navi.UPDATE_GUIDEINFO");
+            // 基础信息
+            iGuide.putExtra("road_name", "V32协议对齐");
+            iGuide.putExtra("next_road_name", "成功之路");
+            iGuide.putExtra("distance", 500 + (count % 10));
+            iGuide.putExtra("icon", 2); // 左转
+            iGuide.putExtra("guide_type", 1); 
+            
+            // 🌟 V32 补全字段 (根据 IAPIGetGuideInfoCallBack.smali)
+            iGuide.putExtra("type", 1);
+            iGuide.putExtra("route_remain_dis", 1000);
+            iGuide.putExtra("route_remain_time", 600);
+            iGuide.putExtra("camera_dist", 0);
+            iGuide.putExtra("camera_type", 0);
+            iGuide.putExtra("camera_speed", 0);
+            iGuide.putExtra("nav_type", 0);
+            // 🌟 浮点数进度 (IAPIGetGuideInfoCallBack 第9个参数是 F)
+            iGuide.putExtra("progress", 0.5f); 
+            
+            // 冗余字段 (防止 key 名称不同)
+            iGuide.putExtra("total_dist", 1000);
+            iGuide.putExtra("total_time", 600);
+            iGuide.putExtra("cur_road_name", "V32协议对齐");
+            
+            ctx.sendBroadcast(iGuide);
+
+            // 4. Surface 强启 (双重保障)
+            Intent iSurface = new Intent("ecarx.navi.SURFACE_CHANGED");
+            iSurface.putExtra("isShow", true);
+            ctx.sendBroadcast(iSurface);
+
+            sendAppLog(ctx, "📡 V32协议广播已发 (17参数)");
+        } catch (Throwable t) {
+            sendAppLog(ctx, "广播异常: " + t.getMessage());
+        }
+    }
+
+    // 启动组件
+    private void launchNaviComponents(Context ctx) {
+        try {
+            Intent sIntent = new Intent();
+            sIntent.setComponent(new ComponentName("com.ecarx.naviwidget", "com.ecarx.naviwidget.service.NaviWidgetService"));
+            sIntent.setAction("com.ecarx.intent.action.NAVI_WIDGET");
+            ctx.startService(sIntent);
+
+            Intent aIntent = new Intent();
+            aIntent.setComponent(new ComponentName("com.ecarx.naviwidget", "com.ecarx.naviwidget.DisplayInfoActivity"));
+            aIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(aIntent);
         } catch (Throwable t) {}
     }
 
-    // 焦点抢占 (V22)
-    private void grabNaviFocus(Context ctx) {
+    // Matrix Lite (维持绿灯)
+    private void keepAliveAndGreen(ClassLoader cl, Context ctx) {
         try {
-            Context target = (mServiceContext != null) ? mServiceContext : ctx;
-            Intent i1 = new Intent("ecarx.intent.action.NAVI_STATE_CHANGE");
-            i1.putExtra("NAVI_STATE", 1); 
-            target.sendBroadcast(i1);
-            Intent i2 = new Intent("com.ecarx.intent.action.NAVI_FOCUS_GAIN");
-            i2.putExtra("packageName", "com.autonavi.amapauto");
-            target.sendBroadcast(i2);
-        } catch (Throwable t) {}
-    }
-
-    // 东软内核注入 (V28)
-    private void injectNeusoftData(ClassLoader cl, Context ctx) {
-        try {
-            Class<?> neuClass = XposedHelpers.findClass(CLS_NEUSOFT_SDK, cl);
-            Object neuInst = XposedHelpers.callStaticMethod(neuClass, "a");
-            if (neuInst == null) neuInst = XposedHelpers.newInstance(neuClass);
-            if (neuInst != null) {
-                try { XposedHelpers.callMethod(neuInst, "a", ctx); } catch(Throwable t){}
-                // 尝试各种可能的初始化/发送方法
-                try { XposedHelpers.callMethod(neuInst, "a", "V29东软数据"); } catch(Throwable t){}
+            Class<?> qClass = XposedHelpers.findClass("q", cl);
+            Object mgr = XposedHelpers.getStaticObjectField(qClass, "a");
+            if (mgr == null) {
+                mgr = XposedHelpers.newInstance(XposedHelpers.findClass("l", cl));
+                XposedHelpers.setStaticObjectField(qClass, "a", mgr);
+            }
+            Object conn = XposedHelpers.getObjectField(mgr, "i");
+            if (conn != null) {
+                XposedHelpers.callMethod(conn, "onServiceConnected", new ComponentName("fake", "fake"), new Binder());
             }
         } catch (Throwable t) {}
     }
 
-    // 💓 V29 混合心跳
-    private void startV29Heartbeat(ClassLoader cl, Context ctx) {
+    // 💓 V32 心跳
+    private void startV32Heartbeat(Context ctx) {
         if (isHeartbeatRunning) return;
         isHeartbeatRunning = true;
         
         new Thread(() -> {
-            sendAppLog(ctx, "💓 V29 图层强启心跳启动...");
+            sendAppLog(ctx, "💓 V32 协议对齐心跳已启动...");
             int count = 0;
             while (isHeartbeatRunning) { 
                 try {
-                    // 1. 刷新 Surface 状态 (开屏幕)
-                    sendSurfaceBroadcast(ctx);
+                    // 发送全量协议广播
+                    sendV32ProtocolBroadcasts(ctx, count);
                     
-                    // 2. 发送 Widget 数据 (给画面)
-                    sendWidgetUpdateBroadcast(ctx, "V29成功", 666);
-                    
-                    // 3. 东软内核注入 (保底)
-                    injectNeusoftData(cl, ctx);
-                    
-                    // 4. 焦点补发
-                    if (count % 3 == 0) grabNaviFocus(ctx);
+                    // 补发焦点
+                    Intent iFocus = new Intent("com.ecarx.intent.action.NAVI_FOCUS_GAIN");
+                    iFocus.putExtra("packageName", "com.autonavi.amapauto");
+                    ctx.sendBroadcast(iFocus);
+
+                    // 尝试拉起组件 (每10秒)
+                    if (count % 5 == 0) launchNaviComponents(ctx);
 
                     Thread.sleep(1500); 
                     count++;
@@ -267,34 +254,22 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private void handleStatusAction(ClassLoader cl, Context ctx, int status) {
-        new Thread(()->{
-            if (status == 13) {
-                grabNaviFocus(ctx);
-                try{Thread.sleep(500);}catch(Exception e){}
-
-                sendAppLog(ctx, ">>> 启动 V29 Surface 强启 <<<");
-
-                // 启动心跳
-                startV29Heartbeat(cl, ctx);
-                
-                sendAppLog(ctx, "✅ 激活指令(Surface+Widget)已广播");
-                
-            } else if (status == 29) {
-                isHeartbeatRunning = false;
-                Intent iStop = new Intent("ecarx.navi.STOP_NAVI");
-                ctx.sendBroadcast(iStop);
-            }
-        }).start();
+        if (status == 13) {
+            keepAliveAndGreen(cl, ctx);
+            sendAppLog(ctx, ">>> 启动 V32 协议对齐 <<<");
+            launchNaviComponents(ctx);
+            startV32Heartbeat(ctx);
+        } else if (status == 29) {
+            isHeartbeatRunning = false;
+            ctx.sendBroadcast(new Intent("ecarx.navi.STOP_NAVI"));
+        }
     }
 
     private void sendAppLog(Context ctx, String log) {
         try {
-            Context c = (ctx != null) ? ctx : android.app.AndroidAppHelper.currentApplication();
-            if (c != null) {
-                Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
-                i.putExtra("log", log);
-                c.sendBroadcast(i);
-            }
+            Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
+            i.putExtra("log", log);
+            ctx.sendBroadcast(i);
         } catch (Throwable t) {}
     }
 }
