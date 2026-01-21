@@ -7,9 +7,12 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Binder; // ✅ 修复: 补全 Binder 引用
 import android.os.Bundle;
+
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XC_MethodReplacement; // ✅ 修复: 补全 XC_MethodReplacement 引用
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -23,8 +26,10 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PERMISSION_NAVI = "ecarx.oem.permission.OPENAPI_NAVI_PERMISSION";
 
     private static Context mServiceContext = null;
-    // 注意：这个变量在不同进程是不共享的！
+    // 跨进程变量不共享，仅用于 Service 进程控制心跳
     private static boolean isHeartbeatRunning = false; 
+    // ✅ 修复: 补全 isReceiverRegistered 变量声明
+    private static boolean isReceiverRegistered = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -49,7 +54,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // ===========================
-    // 🗡️ API 劫持 (核心数据源 - V38修复版)
+    // 🗡️ API 劫持 (核心数据源 - V38无门槛版)
     // ===========================
     private void hookEcarxOpenApi(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
@@ -61,8 +66,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     // 🔴 V38 关键修改：移除 isHeartbeatRunning 检查！
-                    // 因为在 Widget 进程里这个变量永远是 false，导致之前无法注入数据。
-                    // 现在只要组件来问，我们无条件注入！
+                    // 只要组件来问，我们无条件注入！
                     
                     XposedBridge.log("NaviHook: [Widget进程] 拦截到 getGuideInfo，正在注入 V38 数据...");
                     
