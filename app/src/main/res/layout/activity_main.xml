@@ -73,7 +73,7 @@
                 android:id="@+id/btn_vendor_auto" 
                 android:layout_width="match_parent" 
                 android:layout_height="45dp" 
-                android:text="自动轮询" 
+                android:text="恢复 V2" 
                 android:textSize="15sp"
                 android:backgroundTint="#673AB7" 
                 android:layout_marginBottom="6dp"/>
@@ -132,7 +132,7 @@
                 android:textSize="14sp" 
                 android:lineSpacingExtra="4dp"
                 android:fontFamily="monospace" 
-                android:text="--- 系统就绪 (V49 Clean) ---\n"/>
+                android:text="--- 系统就绪 ---\n"/>
         </ScrollView>
     </LinearLayout>
 </LinearLayout>
