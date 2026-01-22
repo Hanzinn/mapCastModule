@@ -67,7 +67,7 @@
                 android:backgroundTint="#009688" 
                 android:layout_marginBottom="12dp"/>
 
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Vendor 身份轮询" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Vendor切换" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
             
             <Button 
                 android:id="@+id/btn_vendor_auto" 
