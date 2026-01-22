@@ -1,14 +1,11 @@
 package com.xsf.amaphelper;
 
 import android.app.Application;
-import android.app.Service;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Bundle;
-import java.util.Set; // 必须导入
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -17,23 +14,23 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
-    private static final String PKG_SERVICE = "ecarx.naviservice";
-    private static final String PKG_WIDGET = "com.ecarx.naviwidget";
+    private static final String PKG_SERVICE = "ecarx.naviservice"; // 对应仪表盘/LBSNavi
+    private static final String PKG_WIDGET = "com.ecarx.naviwidget"; // 对应桌面小组件
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // 📜 协议定义 (PDF标准)
+    // 📜 协议定义
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
-    // 🌟 数据仓库
+    // 🌟 静态数据仓库 (Xposed中静态变量在同一进程内共享，跨进程不共享，所以两个进程会各自维护一份)
     private static String curRoadName = "等待数据...";
-    private static String nextRoadName = "系统待机";
+    private static String nextRoadName = "双管齐下V56";
     private static int turnIcon = 2;
     private static int segmentDis = 0;
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
     
     // ⚙️ 控制变量
-    private static int widgetLogCount = 0;
+    private static int logCount = 0;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -42,39 +39,36 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        // 1. Service 进程 (只负责点灯和保活)
-        if (lpparam.packageName.equals(PKG_SERVICE)) {
-            initNaviServiceHook(lpparam);
-        }
-
-        // 2. Widget 进程 (显示端 - 核心修改)
-        if (lpparam.packageName.equals(PKG_WIDGET)) {
-            initNaviWidgetBridgeHook(lpparam);
+        // 🌟 策略调整：不管是 Service 还是 Widget，都执行同样的数据注入逻辑！
+        if (lpparam.packageName.equals(PKG_SERVICE) || lpparam.packageName.equals(PKG_WIDGET)) {
+            initUniversalHook(lpparam);
         }
     }
 
     // =============================================================
-    // PART 1: Widget 进程 (温柔Hook + 深度扫描)
+    // 通用 Hook 逻辑：适用于 Service 和 Widget 两个进程
     // =============================================================
-    private void initNaviWidgetBridgeHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 1. 注册广播 (只用 Application，最稳)
+    private void initUniversalHook(XC_LoadPackage.LoadPackageParam lpparam) {
+        String procName = lpparam.packageName.contains("service") ? "[LBSNavi]" : "[Widget]";
+
+        // 1. 注册广播 (深度扫描 + 数据提取)
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Context context = (Context) param.thisObject;
-                    registerDeepScanner(context);
+                    registerDeepScanner(context, procName);
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Widget Hook Error: " + t);
+            XposedBridge.log("NaviHook: Hook App onCreate Failed in " + procName);
         }
 
-        // 2. 温柔劫持 API (改为 afterHookedMethod)
-        hookEcarxOpenApiGentle(lpparam);
+        // 2. 温柔劫持 API (给两个进程都喂饭)
+        hookEcarxOpenApiGentle(lpparam, procName);
     }
 
-    private void registerDeepScanner(Context context) {
+    private void registerDeepScanner(Context context, String procName) {
         try {
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override
@@ -85,31 +79,29 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (AMAP_ACTION.equals(action)) {
                             Bundle bundle = intent.getExtras();
                             if (bundle != null) {
-                                // 🔍 深度探针：打印所有 Key
-                                if (widgetLogCount++ % 20 == 0) {
-                                    StringBuilder sb = new StringBuilder("🔍 高德探针: ");
-                                    for (String key : bundle.keySet()) {
-                                        sb.append(key).append("=").append(bundle.get(key)).append("; ");
-                                    }
-                                    XposedBridge.log(sb.toString()); // 输出到 LSP 日志
+                                // 🔍 两个进程都打印日志，看看谁收到了
+                                if (logCount++ % 20 == 0) {
+                                    XposedBridge.log("🔍 " + procName + " 收到高德广播");
                                 }
 
-                                // 🔄 自动识别并提取数据 (大小写通吃)
+                                // 🔄 提取数据
                                 extractData(bundle);
                                 
-                                // ⚡ 唤醒组件
-                                sendInternalWakeUp(ctx);
+                                // ⚡ 唤醒！(谁收到谁就喊一嗓子)
+                                sendInternalWakeUp(ctx, procName);
                                 
-                                // 💡 反馈
-                                if (widgetLogCount % 10 == 0) {
-                                    sendAppLog(ctx, "⚡ [数据] " + curRoadName);
-                                    sendAppLog(ctx, "STATUS_WIDGET_READY");
+                                // 💡 反馈到 UI
+                                if (logCount % 10 == 0) {
+                                    sendAppLog(ctx, "⚡ " + procName + " 捕获: " + curRoadName);
+                                    // 区分进程报告状态
+                                    if (procName.contains("Widget")) sendAppLog(ctx, "STATUS_WIDGET_READY");
+                                    if (procName.contains("LBSNavi")) sendAppLog(ctx, "STATUS_HOOK_READY (Active)");
                                 }
                             }
                         }
-                        // 响应 App 的状态查询
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                             sendAppLog(ctx, "STATUS_WIDGET_READY");
+                            if (procName.contains("Widget")) sendAppLog(ctx, "STATUS_WIDGET_READY");
+                            if (procName.contains("LBSNavi")) sendAppLog(ctx, "STATUS_HOOK_READY (Echo)");
                         }
                     } catch (Throwable t) {
                         XposedBridge.log("NaviHook Recv Err: " + t);
@@ -122,17 +114,16 @@ public class MainHook implements IXposedHookLoadPackage {
             filter.addAction("XSF_ACTION_SET_VENDOR");
             filter.addAction("XSF_ACTION_SEND_STATUS");
             context.registerReceiver(receiver, filter);
-            XposedBridge.log("NaviHook: Deep Scanner Registered (V55)");
+            XposedBridge.log("NaviHook: Scanner Registered in " + procName);
             
         } catch (Throwable t) {}
     }
 
-    // 智能提取数据 (不依赖固定 Key，尝试所有可能)
     private void extractData(Bundle b) {
         // 路名
         String road = b.getString("CUR_ROAD_NAME");
         if (road == null) road = b.getString("cur_road_name");
-        if (road == null) road = b.getString("ROAD_NAME"); // 巡航模式
+        if (road == null) road = b.getString("ROAD_NAME");
         if (road != null) curRoadName = road;
 
         String next = b.getString("NEXT_ROAD_NAME");
@@ -150,12 +141,11 @@ public class MainHook implements IXposedHookLoadPackage {
         if (icon == -1) icon = b.getInt("icon", 2);
         if (icon != -1) turnIcon = icon;
         
-        // 剩余信息
         routeRemainDis = b.getInt("ROUTE_REMAIN_DIS", b.getInt("route_remain_dis", 0));
         routeRemainTime = b.getInt("ROUTE_REMAIN_TIME", b.getInt("route_remain_time", 0));
     }
 
-    private void sendInternalWakeUp(Context ctx) {
+    private void sendInternalWakeUp(Context ctx, String procName) {
         try {
             // 🌟 锁定 Vendor 2
             int targetVendor = 2;
@@ -164,9 +154,11 @@ public class MainHook implements IXposedHookLoadPackage {
             iStatus.putExtra("status", 1); 
             iStatus.putExtra("is_navi", true);
             iStatus.putExtra("vendor", targetVendor);
-            iStatus.putExtra("route_state", 0);
-            iStatus.setPackage(PKG_WIDGET); 
+            iStatus.setPackage(PKG_WIDGET); // 依然发给 Widget，因为它是显示的排头兵
             ctx.sendBroadcast(iStatus);
+
+            // 如果是 Service 进程，额外发一个给自己的通知（如果有必要）
+            // 但通常广播是全局的，只要发出去大家都能收到
 
             Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
             iRefresh.setPackage(PKG_WIDGET);
@@ -174,8 +166,8 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🌟 核心修改：温柔 Hook (afterHookedMethod)
-    private void hookEcarxOpenApiGentle(XC_LoadPackage.LoadPackageParam lpparam) {
+    // 🌟 核心修改：温柔 Hook 应用于所有进程
+    private void hookEcarxOpenApiGentle(XC_LoadPackage.LoadPackageParam lpparam, String procName) {
         try {
             Class<?> apiClass = XposedHelpers.findClass("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
             Class<?> cbClass = XposedHelpers.findClass("com.neusoft.nts.ecarxnavsdk.IAPIGetGuideInfoCallBack", lpparam.classLoader);
@@ -183,81 +175,22 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(apiClass, "getGuideInfo", cbClass, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    // 🌟 重点：等原方法执行完，我们再追加一次回调更新
                     Object callback = param.args[0];
                     if (callback != null) {
-                        XposedBridge.log("NaviHook: 原方法执行完毕，注入数据...");
+                        // 无论是在 LBSNavi 还是 Widget 里，只要有人问，我们就答！
+                        XposedBridge.log("NaviHook: " + procName + " 正在请求数据，执行注入...");
                         XposedHelpers.callMethod(callback, "getGuideInfoResult",
                             1, routeRemainDis, routeRemainTime, 0, 0, 0,
                             nextRoadName, nextRoadName, 
                             0.5f, 0, segmentDis, turnIcon, 
                             curRoadName, routeRemainDis, routeRemainTime, 0, 0
                         );
-                        // 不修改 setResult，保证原流程通畅
                     }
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Gentle Hook Error: " + t);
+            XposedBridge.log("NaviHook: Hook API Failed in " + procName + ": " + t);
         }
-    }
-
-    // =============================================================
-    // PART 2: Service 进程 (状态回显)
-    // =============================================================
-    private void initNaviServiceHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 双重保险 Hook
-        XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "attachBaseContext", Context.class, new XC_MethodHook() {
-             @Override protected void afterHookedMethod(MethodHookParam param) throws Throwable { if (param.thisObject instanceof Service) {} }
-        });
-
-        XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                Context context = (Context) param.thisObject;
-                registerServiceReceiver(context);
-                sendAppLog(context, "STATUS_HOOK_READY (Boot)");
-            }
-        });
-        
-        try { XposedHelpers.findAndHookMethod("ecarx.naviservice.d.y", lpparam.classLoader, "b", String.class, XC_MethodReplacement.returnConstant(70500)); } catch (Throwable t) {}
-    }
-
-    private void registerServiceReceiver(Context context) {
-        BroadcastReceiver receiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context ctx, Intent intent) {
-                String action = intent.getAction();
-                if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                    sendAppLog(ctx, "STATUS_HOOK_READY (Echo)");     
-                    sendAppLog(ctx, "STATUS_SERVICE_RUNNING (Echo)");
-                    keepAliveAndGreen(ctx); // 保持绿灯
-                } 
-                else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
-                    keepAliveAndGreen(ctx);
-                    sendAppLog(ctx, "STATUS_IPC_CONNECTED (Force)"); 
-                }
-            }
-        };
-        IntentFilter filter = new IntentFilter();
-        filter.addAction("XSF_ACTION_SEND_STATUS");
-        filter.addAction("XSF_ACTION_FORCE_CONNECT");
-        context.registerReceiver(receiver, filter);
-    }
-
-    private void keepAliveAndGreen(Context ctx) {
-        try {
-            Class<?> q = XposedHelpers.findClass("q", ctx.getClassLoader());
-            Object mgr = XposedHelpers.getStaticObjectField(q, "a");
-            if (mgr == null) {
-                mgr = XposedHelpers.newInstance(XposedHelpers.findClass("l", ctx.getClassLoader()));
-                XposedHelpers.setStaticObjectField(q, "a", mgr);
-            }
-            Object conn = XposedHelpers.getObjectField(mgr, "i");
-            if (conn != null) {
-                XposedHelpers.callMethod(conn, "onServiceConnected", new ComponentName("f","f"), null);
-            }
-        } catch (Throwable t) {}
     }
 
     private void sendAppLog(Context ctx, String log) {
