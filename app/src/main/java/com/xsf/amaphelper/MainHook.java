@@ -8,6 +8,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -20,14 +22,18 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_WIDGET = "com.ecarx.naviwidget";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
-    // 📜 严格按照 PDF 协议
+    // 🌟 补回缺失的权限定义
+    private static final String PERMISSION_NAVI = "ecarx.oem.permission.OPENAPI_NAVI_PERMISSION";
+    
+    // 📜 协议定义
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
-    private static final int KEY_TYPE_NAVI_INFO = 10001;
+    private static final int KEY_TYPE_NAVI = 10001;  // 导航引导信息
+    private static final int KEY_TYPE_CRUISE = 10019; // 巡航/位置信息
 
     // 🌟 数据仓库
-    private static String curRoadName = "等待高德广播...";
-    private static String nextRoadName = "V52协议适配...";
-    private static int turnIcon = 2;
+    private static String curRoadName = "等待数据...";
+    private static String nextRoadName = "系统待机";
+    private static int turnIcon = 2; // 直行/默认
     private static int segmentDis = 0;
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
@@ -38,34 +44,29 @@ public class MainHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // 0. 自身激活
         if (lpparam.packageName.equals(PKG_SELF)) {
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, "isModuleActive", XC_MethodReplacement.returnConstant(true));
             return;
         }
 
-        // 1. Service 进程 (控制中心)
         if (lpparam.packageName.equals(PKG_SERVICE)) {
             initNaviServiceHook(lpparam);
         }
 
-        // 2. Widget 进程 (显示端)
         if (lpparam.packageName.equals(PKG_WIDGET)) {
             initNaviWidgetBridgeHook(lpparam);
         }
     }
 
     // =============================================================
-    // PART 1: Widget 进程 (防崩设计 + PDF协议适配)
+    // PART 1: Widget 进程 (显示端)
     // =============================================================
     private void initNaviWidgetBridgeHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 🚨 极简 Hook：只用 Application，且去掉所有 Handler 延时，防止崩溃
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Context context = (Context) param.thisObject;
-                    // 直接注册，不做任何多余操作
                     registerWidgetReceiver(context);
                 }
             });
@@ -73,7 +74,6 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedBridge.log("NaviHook: Widget Hook Error: " + t);
         }
 
-        // 劫持 API
         hookEcarxOpenApiWithRealData(lpparam);
     }
 
@@ -85,53 +85,30 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                         String action = intent.getAction();
                         
-                        // ✅ 匹配高德 PDF 协议
                         if (AMAP_ACTION.equals(action)) {
                             int keyType = intent.getIntExtra("KEY_TYPE", 0);
                             
-                            // 🔍 调试：只要收到高德广播就打一条日志，看看 KeyType 是多少
-                            if (widgetLogCount++ % 20 == 0) {
-                                sendAppLog(ctx, "🔍 侦测到高德广播 Type=" + keyType);
+                            // 🌟 核心逻辑：大小通吃，只要有数据就唤醒
+                            if (keyType == KEY_TYPE_NAVI) {
+                                parseNaviInfo(intent);
+                                sendInternalWakeUp(ctx); // 唤醒！
+                                logData(ctx, "⚡ [导航] " + curRoadName);
+                            } 
+                            else if (keyType == KEY_TYPE_CRUISE) {
+                                parseCruiseInfo(intent);
+                                sendInternalWakeUp(ctx); // 唤醒！
+                                logData(ctx, "🛳️ [巡航] " + curRoadName);
                             }
-
-                            if (keyType == KEY_TYPE_NAVI_INFO) {
-                                // 1. 解析数据 (PDF 标准字段 + 备用小写字段)
-                                String road = intent.getStringExtra("CUR_ROAD_NAME");
-                                if (road == null) road = intent.getStringExtra("cur_road_name");
-                                if (road != null) curRoadName = road;
-
-                                String next = intent.getStringExtra("NEXT_ROAD_NAME");
-                                if (next == null) next = intent.getStringExtra("next_road_name");
-                                if (next != null) nextRoadName = next;
-
-                                // PDF 字段: SEG_REMAIN_DIS (下个路口距离)
-                                segmentDis = intent.getIntExtra("SEG_REMAIN_DIS", intent.getIntExtra("seg_remain_dis", 0));
-                                // 兼容: 以前我们用 DISTANCE，高德有的版本用 SEG_REMAIN_DIS，这里做个双保险
-                                if (segmentDis == 0) segmentDis = intent.getIntExtra("DISTANCE", 0);
-
-                                turnIcon = intent.getIntExtra("ICON", intent.getIntExtra("icon", 2));
-                                routeRemainDis = intent.getIntExtra("ROUTE_REMAIN_DIS", intent.getIntExtra("route_remain_dis", 0));
-                                routeRemainTime = intent.getIntExtra("ROUTE_REMAIN_TIME", intent.getIntExtra("route_remain_time", 0));
-
-                                // 2. 收到数据，立即唤醒组件
-                                sendInternalWakeUp(ctx);
-                                
-                                // 3. 反馈
-                                if (widgetLogCount % 5 == 0) {
-                                    sendAppLog(ctx, "⚡ [Widget] 捕获数据: " + curRoadName);
-                                    // 顺便报个活，点亮“组件Hook”灯
-                                    sendAppLog(ctx, "STATUS_WIDGET_READY");
+                            else {
+                                // 收到其他未知数据，也可以作为心跳
+                                if (widgetLogCount % 50 == 0) {
+                                    sendAppLog(ctx, "🔍 收到其他广播 Type=" + keyType);
                                 }
                             }
                         }
-                        // 收到手动 Vendor 设置
                         else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                            // 这里其实不需要做什么，因为我们已经在 sendInternalWakeUp 里死锁 Vendor 2 了
-                            // 但为了调试，可以留个日志
-                            int v = intent.getIntExtra("vendor", 2);
-                            XposedBridge.log("Widget 收到 Vendor: " + v);
+                            // 预留接口
                         }
-                        // 收到 App 询问状态
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                              sendAppLog(ctx, "STATUS_WIDGET_READY");
                         }
@@ -143,18 +120,61 @@ public class MainHook implements IXposedHookLoadPackage {
             };
             
             IntentFilter filter = new IntentFilter();
-            filter.addAction(AMAP_ACTION); // 修正为 AUTONAVI_STANDARD_BROADCAST_SEND
+            filter.addAction(AMAP_ACTION);
             filter.addAction("XSF_ACTION_SET_VENDOR");
             filter.addAction("XSF_ACTION_SEND_STATUS");
             context.registerReceiver(receiver, filter);
-            XposedBridge.log("NaviHook: Widget Receiver Registered (V52)");
             
         } catch (Throwable t) {}
     }
 
+    // 解析 10001 (导航模式)
+    private void parseNaviInfo(Intent intent) {
+        String road = intent.getStringExtra("CUR_ROAD_NAME");
+        if (road == null) road = intent.getStringExtra("cur_road_name");
+        if (road != null) curRoadName = road;
+
+        String next = intent.getStringExtra("NEXT_ROAD_NAME");
+        if (next == null) next = intent.getStringExtra("next_road_name");
+        if (next != null) nextRoadName = next;
+
+        segmentDis = intent.getIntExtra("SEG_REMAIN_DIS", intent.getIntExtra("seg_remain_dis", 0));
+        // 双保险
+        if (segmentDis == 0) segmentDis = intent.getIntExtra("DISTANCE", 0);
+
+        turnIcon = intent.getIntExtra("ICON", intent.getIntExtra("icon", 2));
+        routeRemainDis = intent.getIntExtra("ROUTE_REMAIN_DIS", intent.getIntExtra("route_remain_dis", 0));
+        routeRemainTime = intent.getIntExtra("ROUTE_REMAIN_TIME", intent.getIntExtra("route_remain_time", 0));
+    }
+
+    // 解析 10019 (巡航模式) - 让你不导航也能亮！
+    private void parseCruiseInfo(Intent intent) {
+        // 巡航模式下，通常只有当前路名
+        String road = intent.getStringExtra("ROAD_NAME"); // 10019通常用 ROAD_NAME
+        if (road == null) road = intent.getStringExtra("road_name");
+        if (road == null) road = intent.getStringExtra("CUR_ROAD_NAME"); // 尝试备用
+        
+        if (road != null && !road.isEmpty()) {
+            curRoadName = road;
+        } else {
+            curRoadName = "正在定位...";
+        }
+        
+        nextRoadName = "自由巡航中";
+        turnIcon = 1; // 直行图标
+        segmentDis = 0;
+    }
+
+    private void logData(Context ctx, String msg) {
+        if (widgetLogCount++ % 10 == 0) { // 降低日志频率
+            sendAppLog(ctx, msg);
+            sendAppLog(ctx, "STATUS_WIDGET_READY"); // 顺便点亮状态灯
+        }
+    }
+
     private void sendInternalWakeUp(Context ctx) {
         try {
-            // 🌟 死锁 Vendor 2 (根据您的测试结果)
+            // 🌟 锁定 Vendor 2 (根据你的测试)
             int targetVendor = 2;
 
             Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
@@ -163,7 +183,7 @@ public class MainHook implements IXposedHookLoadPackage {
             iStatus.putExtra("vendor", targetVendor);
             iStatus.putExtra("route_state", 0);
             iStatus.setPackage(PKG_WIDGET); 
-            ctx.sendBroadcast(iStatus);
+            ctx.sendBroadcast(iStatus, PERMISSION_NAVI); // 这里现在有定义了
 
             Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
             iRefresh.setPackage(PKG_WIDGET);
@@ -195,16 +215,13 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // PART 2: Service 进程 (控制中心)
+    // PART 2: Service 进程
     // =============================================================
     private void initNaviServiceHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 双重 Hook 防止漏网，但主要依赖 Application
         XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "attachBaseContext", Context.class, new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                if (param.thisObject instanceof Service) {
-                    // 仅做标记，不做实质操作
-                }
+                if (param.thisObject instanceof Service) {}
             }
         });
 
@@ -213,8 +230,9 @@ public class MainHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context context = (Context) param.thisObject;
                 registerServiceReceiver(context);
-                // 启动即发一次，如果没收到只能靠手动激活
-                sendAppLog(context, "STATUS_HOOK_READY (Boot)");
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    sendAppLog(context, "STATUS_HOOK_READY (DelayCheck)");
+                }, 8000);
             }
         });
         
@@ -226,9 +244,7 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             public void onReceive(Context ctx, Intent intent) {
                 String action = intent.getAction();
-                
                 if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                    // 回显：点亮灯
                     sendAppLog(ctx, "STATUS_HOOK_READY (Echo)");     
                     sendAppLog(ctx, "STATUS_SERVICE_RUNNING (Echo)");
                     if (!isServiceHeartbeatRunning) startServiceHeartbeat(ctx);
@@ -248,17 +264,15 @@ public class MainHook implements IXposedHookLoadPackage {
     private void startServiceHeartbeat(Context ctx) {
         isServiceHeartbeatRunning = true;
         new Thread(() -> {
-            sendAppLog(ctx, "💓 V52 引擎启动 (锁定 V2)...");
+            sendAppLog(ctx, "💓 V53 全兼容版启动 (V2)...");
             int count = 0;
             while (isServiceHeartbeatRunning) {
                 try {
                     if (count % 5 == 0) keepAliveAndGreen(ctx);
                     
-                    // 🌟 死锁 Vendor 2
+                    // 锁定 Vendor 2
                     int currentVendor = 2;
-                    
-                    // 降低日志频率，每10秒报一次，证明还活着
-                    if (count % 3 == 0) sendAppLog(ctx, "🔒 Service 锁定 V2");
+                    if (count % 4 == 0) sendAppLog(ctx, "🔒 Service 维持 V2");
 
                     Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
                     iStatus.putExtra("status", 1);
