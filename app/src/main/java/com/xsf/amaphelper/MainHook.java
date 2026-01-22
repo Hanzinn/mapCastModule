@@ -2,10 +2,13 @@ package com.xsf.amaphelper;
 
 import android.app.Application;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -14,23 +17,23 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
-    private static final String PKG_SERVICE = "ecarx.naviservice"; // 对应仪表盘/LBSNavi
-    private static final String PKG_WIDGET = "com.ecarx.naviwidget"; // 对应桌面小组件
+    private static final String PKG_SERVICE = "ecarx.naviservice";
+    private static final String PKG_WIDGET = "com.ecarx.naviwidget";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     
     // 📜 协议定义
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
-    // 🌟 静态数据仓库 (Xposed中静态变量在同一进程内共享，跨进程不共享，所以两个进程会各自维护一份)
+    // 🌟 数据仓库
     private static String curRoadName = "等待数据...";
-    private static String nextRoadName = "双管齐下V56";
+    private static String nextRoadName = "";
     private static int turnIcon = 2;
     private static int segmentDis = 0;
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
-    
-    // ⚙️ 控制变量
-    private static int logCount = 0;
+
+    // ⚙️ 心跳控制
+    private static boolean isServiceHeartbeatRunning = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -39,36 +42,38 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        // 🌟 策略调整：不管是 Service 还是 Widget，都执行同样的数据注入逻辑！
+        // 🌟 防御性入口：只对目标进程操作
         if (lpparam.packageName.equals(PKG_SERVICE) || lpparam.packageName.equals(PKG_WIDGET)) {
-            initUniversalHook(lpparam);
+            initSafeHook(lpparam);
         }
     }
 
-    // =============================================================
-    // 通用 Hook 逻辑：适用于 Service 和 Widget 两个进程
-    // =============================================================
-    private void initUniversalHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        String procName = lpparam.packageName.contains("service") ? "[LBSNavi]" : "[Widget]";
+    private void initSafeHook(XC_LoadPackage.LoadPackageParam lpparam) {
+        final String procName = lpparam.packageName.contains("service") ? "LBSNavi" : "Widget";
 
-        // 1. 注册广播 (深度扫描 + 数据提取)
+        // 1. 安全入口：Application.onCreate (绝不碰 attachBaseContext)
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Context context = (Context) param.thisObject;
-                    registerDeepScanner(context, procName);
+                    registerReceiverSafe(context, procName);
+                    
+                    // 延时3秒报活 (防止还没初始化完就发广播)
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                         reportStatus(context, procName, "BOOT");
+                    }, 3000);
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Hook App onCreate Failed in " + procName);
+            XposedBridge.log("NaviHook: Failed to hook onCreate in " + procName);
         }
 
-        // 2. 温柔劫持 API (给两个进程都喂饭)
-        hookEcarxOpenApiGentle(lpparam, procName);
+        // 2. 防御性 API Hook (先查类是否存在，不存在就不 Hook)
+        hookApiDefensive(lpparam, procName);
     }
 
-    private void registerDeepScanner(Context context, String procName) {
+    private void registerReceiverSafe(Context context, String procName) {
         try {
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override
@@ -77,120 +82,168 @@ public class MainHook implements IXposedHookLoadPackage {
                         String action = intent.getAction();
                         
                         if (AMAP_ACTION.equals(action)) {
-                            Bundle bundle = intent.getExtras();
-                            if (bundle != null) {
-                                // 🔍 两个进程都打印日志，看看谁收到了
-                                if (logCount++ % 20 == 0) {
-                                    XposedBridge.log("🔍 " + procName + " 收到高德广播");
-                                }
+                            // 🌟 收到广播证明链路通畅
+                            if (!isServiceHeartbeatRunning && procName.equals("LBSNavi")) {
+                                startServiceHeartbeat(ctx); // 启动物理保活
+                            }
+                            reportStatus(ctx, procName, "LIVE");
 
-                                // 🔄 提取数据
-                                extractData(bundle);
-                                
-                                // ⚡ 唤醒！(谁收到谁就喊一嗓子)
-                                sendInternalWakeUp(ctx, procName);
-                                
-                                // 💡 反馈到 UI
-                                if (logCount % 10 == 0) {
-                                    sendAppLog(ctx, "⚡ " + procName + " 捕获: " + curRoadName);
-                                    // 区分进程报告状态
-                                    if (procName.contains("Widget")) sendAppLog(ctx, "STATUS_WIDGET_READY");
-                                    if (procName.contains("LBSNavi")) sendAppLog(ctx, "STATUS_HOOK_READY (Active)");
+                            Bundle b = intent.getExtras();
+                            if (b != null) {
+                                // 🔍 全量探针：打印 Bundle 内容，帮你找 Key
+                                // 仅在 Widget 进程打印，防止日志双倍刷屏
+                                if (procName.equals("Widget") && Math.random() < 0.1) { 
+                                    XposedBridge.log("🔍 [探针] " + b.toString());
                                 }
+                                
+                                // 提取数据
+                                extractData(b);
+                                
+                                // 唤醒
+                                sendInternalWakeUp(ctx);
                             }
                         }
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                            if (procName.contains("Widget")) sendAppLog(ctx, "STATUS_WIDGET_READY");
-                            if (procName.contains("LBSNavi")) sendAppLog(ctx, "STATUS_HOOK_READY (Echo)");
+                            reportStatus(ctx, procName, "ECHO");
                         }
-                    } catch (Throwable t) {
-                        XposedBridge.log("NaviHook Recv Err: " + t);
-                    }
+                        else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
+                            if (procName.equals("LBSNavi")) keepAliveAndGreen(ctx);
+                            reportStatus(ctx, procName, "FORCE");
+                        }
+
+                    } catch (Throwable t) {}
                 }
             };
             
             IntentFilter filter = new IntentFilter();
             filter.addAction(AMAP_ACTION);
-            filter.addAction("XSF_ACTION_SET_VENDOR");
             filter.addAction("XSF_ACTION_SEND_STATUS");
+            filter.addAction("XSF_ACTION_FORCE_CONNECT");
             context.registerReceiver(receiver, filter);
-            XposedBridge.log("NaviHook: Scanner Registered in " + procName);
             
         } catch (Throwable t) {}
     }
 
     private void extractData(Bundle b) {
-        // 路名
+        // 尝试从 Bundle 中提取数据 (兼容大小写)
         String road = b.getString("CUR_ROAD_NAME");
         if (road == null) road = b.getString("cur_road_name");
-        if (road == null) road = b.getString("ROAD_NAME");
+        if (road == null) road = b.getString("ROAD_NAME"); // 巡航模式
         if (road != null) curRoadName = road;
 
         String next = b.getString("NEXT_ROAD_NAME");
         if (next == null) next = b.getString("next_road_name");
         if (next != null) nextRoadName = next;
 
-        // 距离
-        int dist = b.getInt("SEG_REMAIN_DIS", 0);
-        if (dist == 0) dist = b.getInt("seg_remain_dis", 0);
-        if (dist == 0) dist = b.getInt("DISTANCE", 0);
-        segmentDis = dist;
+        segmentDis = getIntFromBundle(b, "SEG_REMAIN_DIS", "seg_remain_dis", "DISTANCE");
+        turnIcon = getIntFromBundle(b, "ICON", "icon", null);
+        routeRemainDis = getIntFromBundle(b, "ROUTE_REMAIN_DIS", "route_remain_dis", null);
+        routeRemainTime = getIntFromBundle(b, "ROUTE_REMAIN_TIME", "route_remain_time", null);
+    }
+    
+    private int getIntFromBundle(Bundle b, String k1, String k2, String k3) {
+        int v = b.getInt(k1, -1);
+        if (v == -1) v = b.getInt(k2, -1);
+        if (v == -1 && k3 != null) v = b.getInt(k3, -1);
+        return (v == -1) ? 0 : v;
+    }
 
-        // 图标
-        int icon = b.getInt("ICON", -1);
-        if (icon == -1) icon = b.getInt("icon", 2);
-        if (icon != -1) turnIcon = icon;
+    private void sendInternalWakeUp(Context ctx) {
+        // 简单唤醒
+        Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
+        iRefresh.setPackage(PKG_WIDGET);
+        ctx.sendBroadcast(iRefresh);
         
-        routeRemainDis = b.getInt("ROUTE_REMAIN_DIS", b.getInt("route_remain_dis", 0));
-        routeRemainTime = b.getInt("ROUTE_REMAIN_TIME", b.getInt("route_remain_time", 0));
+        // 状态更新 (Vendor 2)
+        Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
+        iStatus.putExtra("status", 1); 
+        iStatus.putExtra("is_navi", true);
+        iStatus.putExtra("vendor", 2);
+        iStatus.setPackage(PKG_WIDGET); 
+        ctx.sendBroadcast(iStatus);
     }
 
-    private void sendInternalWakeUp(Context ctx, String procName) {
-        try {
-            // 🌟 锁定 Vendor 2
-            int targetVendor = 2;
-
-            Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
-            iStatus.putExtra("status", 1); 
-            iStatus.putExtra("is_navi", true);
-            iStatus.putExtra("vendor", targetVendor);
-            iStatus.setPackage(PKG_WIDGET); // 依然发给 Widget，因为它是显示的排头兵
-            ctx.sendBroadcast(iStatus);
-
-            // 如果是 Service 进程，额外发一个给自己的通知（如果有必要）
-            // 但通常广播是全局的，只要发出去大家都能收到
-
-            Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
-            iRefresh.setPackage(PKG_WIDGET);
-            ctx.sendBroadcast(iRefresh);
-        } catch (Throwable t) {}
+    private void reportStatus(Context ctx, String procName, String type) {
+        if (procName.equals("Widget")) sendAppLog(ctx, "STATUS_WIDGET_READY");
+        if (procName.equals("LBSNavi")) {
+            sendAppLog(ctx, "STATUS_HOOK_READY");
+            sendAppLog(ctx, "STATUS_SERVICE_RUNNING");
+            if (type.equals("FORCE")) sendAppLog(ctx, "STATUS_IPC_CONNECTED");
+        }
     }
 
-    // 🌟 核心修改：温柔 Hook 应用于所有进程
-    private void hookEcarxOpenApiGentle(XC_LoadPackage.LoadPackageParam lpparam, String procName) {
+    // 🌟 物理保活 (仅 LBSNavi 需要)
+    private void startServiceHeartbeat(Context ctx) {
+        isServiceHeartbeatRunning = true;
+        new Thread(() -> {
+            while (isServiceHeartbeatRunning) {
+                try {
+                    keepAliveAndGreen(ctx); // 物理点灯
+                    Thread.sleep(5000); // 5秒一次
+                } catch (Exception e) { break; }
+            }
+        }).start();
+    }
+
+    // 🌟 防御性 API Hook
+    private void hookApiDefensive(XC_LoadPackage.LoadPackageParam lpparam, String procName) {
         try {
-            Class<?> apiClass = XposedHelpers.findClass("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
+            // 1. 先探测类是否存在
+            Class<?> apiClass = XposedHelpers.findClassIfExists("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
+            if (apiClass == null) {
+                XposedBridge.log("NaviHook: [警告] " + procName + " 进程中未找到 SDK 类，跳过注入。");
+                return; // 优雅退出，不崩
+            }
+
             Class<?> cbClass = XposedHelpers.findClass("com.neusoft.nts.ecarxnavsdk.IAPIGetGuideInfoCallBack", lpparam.classLoader);
             
+            // 2. 存在才 Hook
             XposedHelpers.findAndHookMethod(apiClass, "getGuideInfo", cbClass, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Object callback = param.args[0];
                     if (callback != null) {
-                        // 无论是在 LBSNavi 还是 Widget 里，只要有人问，我们就答！
-                        XposedBridge.log("NaviHook: " + procName + " 正在请求数据，执行注入...");
+                        String safeNext = (nextRoadName == null) ? "" : nextRoadName;
+                        String safeCur = (curRoadName == null) ? "" : curRoadName;
+                        
+                        // 注入数据
                         XposedHelpers.callMethod(callback, "getGuideInfoResult",
                             1, routeRemainDis, routeRemainTime, 0, 0, 0,
-                            nextRoadName, nextRoadName, 
+                            safeNext, safeNext, 
                             0.5f, 0, segmentDis, turnIcon, 
-                            curRoadName, routeRemainDis, routeRemainTime, 0, 0
+                            safeCur, routeRemainDis, routeRemainTime, 0, 0
                         );
                     }
                 }
             });
+            XposedBridge.log("NaviHook: API Hook 成功挂载于 " + procName);
+
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Hook API Failed in " + procName + ": " + t);
+            XposedBridge.log("NaviHook: API Hook 异常: " + t);
         }
+    }
+    
+    // 物理连接 (反射调用，不引用类名)
+    private void keepAliveAndGreen(Context ctx) {
+        try {
+            Class<?> q = XposedHelpers.findClassIfExists("q", ctx.getClassLoader());
+            if (q == null) return;
+            
+            Object mgr = XposedHelpers.getStaticObjectField(q, "a");
+            if (mgr == null) {
+                Class<?> l = XposedHelpers.findClassIfExists("l", ctx.getClassLoader());
+                if (l != null) {
+                    mgr = XposedHelpers.newInstance(l);
+                    XposedHelpers.setStaticObjectField(q, "a", mgr);
+                }
+            }
+            if (mgr != null) {
+                Object conn = XposedHelpers.getObjectField(mgr, "i");
+                if (conn != null) {
+                    XposedHelpers.callMethod(conn, "onServiceConnected", new ComponentName("f","f"), null);
+                }
+            }
+        } catch (Throwable t) {}
     }
 
     private void sendAppLog(Context ctx, String log) {
