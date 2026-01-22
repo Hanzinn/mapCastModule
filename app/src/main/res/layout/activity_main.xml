@@ -10,11 +10,17 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#222222"
-        android:padding="15dp"
+        android:padding="10dp"
         android:layout_marginBottom="8dp">
+        
         <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="注入" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        
+        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务Hook" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        
+        <TextView android:id="@+id/tv_widget_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="组件Hook" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        
+        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="运行" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        
         <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
     </LinearLayout>
 
@@ -61,7 +67,7 @@
                 android:backgroundTint="#009688" 
                 android:layout_marginBottom="12dp"/>
 
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="身份轮询控制 (Vendor)" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Vendor 身份轮询" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
             
             <Button 
                 android:id="@+id/btn_vendor_auto" 
@@ -117,7 +123,6 @@
             android:layout_weight="0.6"
             android:background="#111111"
             android:fillViewport="true">
-            
             <TextView 
                 android:id="@+id/tv_log" 
                 android:layout_width="match_parent" 
@@ -127,8 +132,7 @@
                 android:textSize="14sp" 
                 android:lineSpacingExtra="4dp"
                 android:fontFamily="monospace" 
-                android:text="--- 系统就绪 (V46 Large UI) ---\n"/>
+                android:text="--- 系统就绪 (V49 Clean) ---\n"/>
         </ScrollView>
-
     </LinearLayout>
 </LinearLayout>
