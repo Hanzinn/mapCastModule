@@ -9,7 +9,7 @@ import android.content.IntentFilter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import java.util.Set; // 必须导入
+import java.util.Set;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -21,10 +21,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SERVICE = "ecarx.naviservice";
     private static final String PKG_WIDGET = "com.ecarx.naviwidget";
     private static final String PKG_SELF = "com.xsf.amaphelper";
-    
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
-    // 数据仓库
     private static String curRoadName = "等待高德...";
     private static String nextRoadName = "";
     private static int turnIcon = 2;
@@ -32,9 +30,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
 
-    // 控制变量
     private static boolean isServiceHeartbeatRunning = false;
     private static int currentVendor = 2; 
+    
+    // 🔥 新增：采样率控制 (默认 0.1 = 10%)
+    private static double logSamplingRate = 0.1; 
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -51,24 +51,19 @@ public class MainHook implements IXposedHookLoadPackage {
     private void initSafeHook(XC_LoadPackage.LoadPackageParam lpparam) {
         final String procName = lpparam.packageName.contains("service") ? "LBSNavi" : "Widget";
 
-        // 1. 注册广播
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Context context = (Context) param.thisObject;
                     registerReceiver(context, procName);
-                    
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                          reportStatus(context, procName, "BOOT");
                     }, 3000);
                 }
             });
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Failed to hook onCreate in " + procName);
-        }
+        } catch (Throwable t) {}
 
-        // 2. 防御性 API Hook
         hookApiDefensive(lpparam, procName);
     }
 
@@ -88,16 +83,15 @@ public class MainHook implements IXposedHookLoadPackage {
 
                             Bundle b = intent.getExtras();
                             if (b != null) {
-                                // 🌟🌟🌟 这里是你要求的核心探针 🌟🌟🌟
-                                // 为了调试，我暂时把概率调成 100%，确保只要有数据就打日志！
-                                // 仅在 Widget 进程打印，避免重复
+                                // 🌟 动态采样控制
                                 if (procName.equals("Widget")) {
-                                    StringBuilder sb = new StringBuilder("🔍 广播全量 Key: ");
-                                    // keySet() 会强制系统解包 Bundle，这是最关键的一步
-                                    for (String key : b.keySet()) {
-                                        sb.append(key).append("=").append(b.get(key)).append("; ");
+                                    if (Math.random() < logSamplingRate) { // 核心修改：使用变量而非写死
+                                        StringBuilder sb = new StringBuilder("🔍 广播全量 Key: ");
+                                        for (String key : b.keySet()) {
+                                            sb.append(key).append("=").append(b.get(key)).append("; ");
+                                        }
+                                        XposedBridge.log(sb.toString());
                                     }
-                                    XposedBridge.log(sb.toString());
                                 }
 
                                 extractData(b);
@@ -111,6 +105,11 @@ public class MainHook implements IXposedHookLoadPackage {
                             currentVendor = (newVendor == -1) ? 2 : newVendor;
                             XposedBridge.log("NaviHook: [" + procName + "] Vendor 更新: " + currentVendor);
                             sendInternalWakeUp(ctx);
+                        }
+                        // 🔥 接收采样率更新指令
+                        else if ("XSF_ACTION_SET_SAMPLE_RATE".equals(action)) {
+                            logSamplingRate = intent.getDoubleExtra("rate", 0.1);
+                            XposedBridge.log("NaviHook: [" + procName + "] 采样率已更新为: " + logSamplingRate);
                         }
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                             reportStatus(ctx, procName, "ECHO");
@@ -127,6 +126,7 @@ public class MainHook implements IXposedHookLoadPackage {
             IntentFilter filter = new IntentFilter();
             filter.addAction(AMAP_ACTION);
             filter.addAction("XSF_ACTION_SET_VENDOR");
+            filter.addAction("XSF_ACTION_SET_SAMPLE_RATE"); // 注册新 Action
             filter.addAction("XSF_ACTION_SEND_STATUS");
             filter.addAction("XSF_ACTION_FORCE_CONNECT");
             context.registerReceiver(receiver, filter);
