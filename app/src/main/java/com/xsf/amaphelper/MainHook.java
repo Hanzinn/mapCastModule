@@ -7,10 +7,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.os.Bundle; // 确保导入 Bundle
-import android.os.Handler;
-import android.os.Looper;
-import java.util.Set; // 导入 Set
+import android.os.Bundle;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -22,58 +19,61 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SERVICE = "ecarx.naviservice";
     private static final String PKG_WIDGET = "com.ecarx.naviwidget";
     private static final String PKG_SELF = "com.xsf.amaphelper";
-    private static final String PERMISSION_NAVI = "ecarx.oem.permission.OPENAPI_NAVI_PERMISSION";
-
-    // 🌟 修正1：根据你的PDF，改用老版协议 Action
+    
+    // 📜 严格按照 PDF 协议
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
+    private static final int KEY_TYPE_NAVI_INFO = 10001;
 
-    // 🌟 修正2：根据你的测试，锁定 Vendor 2
-    private static final int TARGET_VENDOR = 2;
-
-    private static String curRoadName = "等待高德V51数据...";
-    private static String nextRoadName = "协议适配中...";
+    // 🌟 数据仓库
+    private static String curRoadName = "等待高德广播...";
+    private static String nextRoadName = "V52协议适配...";
     private static int turnIcon = 2;
     private static int segmentDis = 0;
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
     
-    private static int serviceManualVendor = -1; 
+    // ⚙️ 控制变量
     private static boolean isServiceHeartbeatRunning = false;
-    private static int widgetManualVendor = -1;  
-    private static int widgetAutoCount = 0;      
+    private static int widgetLogCount = 0;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+        // 0. 自身激活
         if (lpparam.packageName.equals(PKG_SELF)) {
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, "isModuleActive", XC_MethodReplacement.returnConstant(true));
             return;
         }
 
+        // 1. Service 进程 (控制中心)
         if (lpparam.packageName.equals(PKG_SERVICE)) {
             initNaviServiceHook(lpparam);
         }
 
+        // 2. Widget 进程 (显示端)
         if (lpparam.packageName.equals(PKG_WIDGET)) {
             initNaviWidgetBridgeHook(lpparam);
         }
     }
 
     // =============================================================
-    // PART 1: Widget 进程 (显示端)
+    // PART 1: Widget 进程 (防崩设计 + PDF协议适配)
     // =============================================================
     private void initNaviWidgetBridgeHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                Context context = (Context) param.thisObject;
-                registerWidgetReceiver(context); 
-                
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    sendAppLog(context, "STATUS_WIDGET_READY");
-                }, 3000);
-            }
-        });
+        // 🚨 极简 Hook：只用 Application，且去掉所有 Handler 延时，防止崩溃
+        try {
+            XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Context context = (Context) param.thisObject;
+                    // 直接注册，不做任何多余操作
+                    registerWidgetReceiver(context);
+                }
+            });
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: Widget Hook Error: " + t);
+        }
 
+        // 劫持 API
         hookEcarxOpenApiWithRealData(lpparam);
     }
 
@@ -82,103 +82,93 @@ public class MainHook implements IXposedHookLoadPackage {
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context ctx, Intent intent) {
-                    String action = intent.getAction();
-                    
-                    // 🌟 修正：监听 AUTONAVI_STANDARD_BROADCAST_SEND
-                    if (AMAP_ACTION.equals(action)) {
-                        try {
-                            // 1. 协议过滤：PDF说 KeyType 10001 是导航信息
+                    try {
+                        String action = intent.getAction();
+                        
+                        // ✅ 匹配高德 PDF 协议
+                        if (AMAP_ACTION.equals(action)) {
                             int keyType = intent.getIntExtra("KEY_TYPE", 0);
                             
-                            // 🔍 数据探针：只要收到广播，把所有 Key 都打印出来，方便我们分析
-                            if (widgetAutoCount % 20 == 0) {
-                                dumpIntentExtras(ctx, intent);
+                            // 🔍 调试：只要收到高德广播就打一条日志，看看 KeyType 是多少
+                            if (widgetLogCount++ % 20 == 0) {
+                                sendAppLog(ctx, "🔍 侦测到高德广播 Type=" + keyType);
                             }
 
-                            if (keyType == 10001) {
-                                // 2. 尝试提取数据 (兼容大小写)
-                                // 路名
+                            if (keyType == KEY_TYPE_NAVI_INFO) {
+                                // 1. 解析数据 (PDF 标准字段 + 备用小写字段)
                                 String road = intent.getStringExtra("CUR_ROAD_NAME");
-                                if (road == null) road = intent.getStringExtra("cur_road_name"); // 备用小写
+                                if (road == null) road = intent.getStringExtra("cur_road_name");
                                 if (road != null) curRoadName = road;
 
-                                String nextRoad = intent.getStringExtra("NEXT_ROAD_NAME");
-                                if (nextRoad == null) nextRoad = intent.getStringExtra("next_road_name");
-                                if (nextRoad != null) nextRoadName = nextRoad;
+                                String next = intent.getStringExtra("NEXT_ROAD_NAME");
+                                if (next == null) next = intent.getStringExtra("next_road_name");
+                                if (next != null) nextRoadName = next;
 
-                                // 图标 & 距离
-                                turnIcon = intent.getIntExtra("ICON", intent.getIntExtra("icon", 2));
+                                // PDF 字段: SEG_REMAIN_DIS (下个路口距离)
                                 segmentDis = intent.getIntExtra("SEG_REMAIN_DIS", intent.getIntExtra("seg_remain_dis", 0));
+                                // 兼容: 以前我们用 DISTANCE，高德有的版本用 SEG_REMAIN_DIS，这里做个双保险
+                                if (segmentDis == 0) segmentDis = intent.getIntExtra("DISTANCE", 0);
+
+                                turnIcon = intent.getIntExtra("ICON", intent.getIntExtra("icon", 2));
                                 routeRemainDis = intent.getIntExtra("ROUTE_REMAIN_DIS", intent.getIntExtra("route_remain_dis", 0));
                                 routeRemainTime = intent.getIntExtra("ROUTE_REMAIN_TIME", intent.getIntExtra("route_remain_time", 0));
 
-                                // 3. 唤醒组件
+                                // 2. 收到数据，立即唤醒组件
                                 sendInternalWakeUp(ctx);
                                 
-                                // 4. 反馈日志
-                                if (widgetAutoCount % 5 == 0) {
-                                    sendAppLog(ctx, "⚡ [Widget] 捕获数据(V2): " + curRoadName);
+                                // 3. 反馈
+                                if (widgetLogCount % 5 == 0) {
+                                    sendAppLog(ctx, "⚡ [Widget] 捕获数据: " + curRoadName);
+                                    // 顺便报个活，点亮“组件Hook”灯
+                                    sendAppLog(ctx, "STATUS_WIDGET_READY");
                                 }
                             }
-                        } catch (Exception e) {
-                            XposedBridge.log("NaviHook Decode Err: " + e);
                         }
-                    }
-                    else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                        widgetManualVendor = intent.getIntExtra("vendor", -1);
-                    }
-                    else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                         sendAppLog(ctx, "STATUS_WIDGET_READY");
+                        // 收到手动 Vendor 设置
+                        else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
+                            // 这里其实不需要做什么，因为我们已经在 sendInternalWakeUp 里死锁 Vendor 2 了
+                            // 但为了调试，可以留个日志
+                            int v = intent.getIntExtra("vendor", 2);
+                            XposedBridge.log("Widget 收到 Vendor: " + v);
+                        }
+                        // 收到 App 询问状态
+                        else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
+                             sendAppLog(ctx, "STATUS_WIDGET_READY");
+                        }
+
+                    } catch (Throwable t) {
+                        XposedBridge.log("NaviHook Recv Err: " + t);
                     }
                 }
             };
             
             IntentFilter filter = new IntentFilter();
-            filter.addAction(AMAP_ACTION); // 使用新 Action
+            filter.addAction(AMAP_ACTION); // 修正为 AUTONAVI_STANDARD_BROADCAST_SEND
             filter.addAction("XSF_ACTION_SET_VENDOR");
             filter.addAction("XSF_ACTION_SEND_STATUS");
             context.registerReceiver(receiver, filter);
-        } catch (Throwable t) {}
-    }
-
-    // 🔍 探针工具：打印所有广播参数
-    private void dumpIntentExtras(Context ctx, Intent intent) {
-        try {
-            Bundle bundle = intent.getExtras();
-            if (bundle != null) {
-                StringBuilder sb = new StringBuilder();
-                sb.append("收到广播 Keys: ");
-                Set<String> keys = bundle.keySet();
-                for (String key : keys) {
-                    sb.append(key).append("=").append(bundle.get(key)).append("; ");
-                }
-                XposedBridge.log(sb.toString()); // 打印到 LSP 日志
-                // 也可以发给 App 显示（如果太长可能会被截断）
-                // sendAppLog(ctx, "🔍 侦测: " + sb.toString().substring(0, Math.min(sb.length(), 100)));
-            }
+            XposedBridge.log("NaviHook: Widget Receiver Registered (V52)");
+            
         } catch (Throwable t) {}
     }
 
     private void sendInternalWakeUp(Context ctx) {
-        int targetVendor;
-        if (widgetManualVendor != -1) {
-            targetVendor = widgetManualVendor;
-        } else {
-            // 🌟 修正：只用 2，或者 2 和 1 (既然你说 2 能亮，重点测 2)
-            targetVendor = (widgetAutoCount++ % 5 == 0) ? 1 : 2; // 80% 概率发 2
-        }
+        try {
+            // 🌟 死锁 Vendor 2 (根据您的测试结果)
+            int targetVendor = 2;
 
-        Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
-        iStatus.putExtra("status", 1); 
-        iStatus.putExtra("is_navi", true);
-        iStatus.putExtra("vendor", targetVendor);
-        iStatus.putExtra("route_state", 0);
-        iStatus.setPackage(PKG_WIDGET); 
-        ctx.sendBroadcast(iStatus);
+            Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
+            iStatus.putExtra("status", 1); 
+            iStatus.putExtra("is_navi", true);
+            iStatus.putExtra("vendor", targetVendor);
+            iStatus.putExtra("route_state", 0);
+            iStatus.setPackage(PKG_WIDGET); 
+            ctx.sendBroadcast(iStatus);
 
-        Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
-        iRefresh.setPackage(PKG_WIDGET);
-        ctx.sendBroadcast(iRefresh);
+            Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
+            iRefresh.setPackage(PKG_WIDGET);
+            ctx.sendBroadcast(iRefresh);
+        } catch (Throwable t) {}
     }
 
     private void hookEcarxOpenApiWithRealData(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -208,12 +198,12 @@ public class MainHook implements IXposedHookLoadPackage {
     // PART 2: Service 进程 (控制中心)
     // =============================================================
     private void initNaviServiceHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        // 抢跑防御
+        // 双重 Hook 防止漏网，但主要依赖 Application
         XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "attachBaseContext", Context.class, new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 if (param.thisObject instanceof Service) {
-                    // 可以在这里提前做点什么，但为了稳定，主要还是靠 Application
+                    // 仅做标记，不做实质操作
                 }
             }
         });
@@ -223,10 +213,8 @@ public class MainHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context context = (Context) param.thisObject;
                 registerServiceReceiver(context);
-                // 延时自检，确保 App 启动后能看到灯亮
-                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                    sendAppLog(context, "STATUS_HOOK_READY (DelayCheck)");
-                }, 8000); // 延时加长到 8秒，给你更多时间打开 App
+                // 启动即发一次，如果没收到只能靠手动激活
+                sendAppLog(context, "STATUS_HOOK_READY (Boot)");
             }
         });
         
@@ -238,7 +226,9 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             public void onReceive(Context ctx, Intent intent) {
                 String action = intent.getAction();
+                
                 if ("XSF_ACTION_SEND_STATUS".equals(action)) {
+                    // 回显：点亮灯
                     sendAppLog(ctx, "STATUS_HOOK_READY (Echo)");     
                     sendAppLog(ctx, "STATUS_SERVICE_RUNNING (Echo)");
                     if (!isServiceHeartbeatRunning) startServiceHeartbeat(ctx);
@@ -247,36 +237,28 @@ public class MainHook implements IXposedHookLoadPackage {
                     keepAliveAndGreen(ctx);
                     sendAppLog(ctx, "STATUS_IPC_CONNECTED (Force)"); 
                 }
-                else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                    serviceManualVendor = intent.getIntExtra("vendor", -1);
-                    sendAppLog(ctx, "🔒 Service 锁定: " + serviceManualVendor);
-                }
             }
         };
         IntentFilter filter = new IntentFilter();
         filter.addAction("XSF_ACTION_SEND_STATUS");
         filter.addAction("XSF_ACTION_FORCE_CONNECT");
-        filter.addAction("XSF_ACTION_SET_VENDOR");
         context.registerReceiver(receiver, filter);
     }
 
     private void startServiceHeartbeat(Context ctx) {
         isServiceHeartbeatRunning = true;
         new Thread(() -> {
-            sendAppLog(ctx, "💓 V51 协议修正版启动 (Target V2)...");
+            sendAppLog(ctx, "💓 V52 引擎启动 (锁定 V2)...");
             int count = 0;
             while (isServiceHeartbeatRunning) {
                 try {
                     if (count % 5 == 0) keepAliveAndGreen(ctx);
                     
-                    int currentVendor;
-                    if (serviceManualVendor != -1) {
-                        currentVendor = serviceManualVendor;
-                    } else {
-                        // 🌟 修正：重点测试 Vendor 2
-                        currentVendor = (count % 5 == 0) ? 1 : 2; // 80% 概率发 2
-                        sendAppLog(ctx, "🔄 Service 轮询: " + currentVendor);
-                    }
+                    // 🌟 死锁 Vendor 2
+                    int currentVendor = 2;
+                    
+                    // 降低日志频率，每10秒报一次，证明还活着
+                    if (count % 3 == 0) sendAppLog(ctx, "🔒 Service 锁定 V2");
 
                     Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
                     iStatus.putExtra("status", 1);
