@@ -2,14 +2,17 @@ package com.xsf.amaphelper;
 
 import android.app.Application;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName; // 🌟 核心修复：补全缺失的导入
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import java.util.Set; 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
 import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -45,10 +48,11 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    // 压制 findAndHookMethod 可能产生的警告
+    @SuppressWarnings("deprecation")
     private void initSafeHook(XC_LoadPackage.LoadPackageParam lpparam) {
         final String procName = lpparam.packageName.contains("service") ? "LBSNavi" : "Widget";
 
-        // 1. 注册广播 (所有进程都需要)
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
@@ -63,14 +67,15 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
-        // 🌟 核心修复：只在 LBSNavi 中执行 API Hook
-        // 且内部实现已改为全反射，不引用任何类，确保 Widget 进程绝对安全
+        // 只有 LBSNavi 才执行 API Hook (全反射安全模式)
         if (procName.equals("LBSNavi")) {
             hookApiByReflection(lpparam, procName);
         }
     }
 
-    private void registerReceiver(Context context, String procName) {
+    // 🌟 压制 Log 警告，且保留 final 修饰符
+    @SuppressWarnings("deprecation")
+    private void registerReceiver(final Context context, final String procName) {
         try {
             BroadcastReceiver receiver = new BroadcastReceiver() {
                 @Override
@@ -90,18 +95,17 @@ public class MainHook implements IXposedHookLoadPackage {
 
                             Bundle b = intent.getExtras();
                             if (b != null) {
-                                // 🌟🌟🌟 核心修复：强制解包 (Forced Unparcel) 🌟🌟🌟
-                                // 无论是否打印日志，必须先调用 keySet 触发 Bundle 解压缩
-                                // 否则后续 extractData 读到的全是 null
-                                b.setClassLoader(context.getClassLoader()); // 防止类加载器错乱
+                                // 🌟 核心修复：直接调用 keySet 触发解包
                                 b.keySet(); 
 
                                 // 日志探针 (仅在 Widget 进程打印)
                                 if (procName.equals("Widget") && Math.random() < logSamplingRate) {
                                     StringBuilder sb = new StringBuilder("🔍 有效包: ");
                                     for (String key : b.keySet()) {
+                                        // 只打印关键字段
                                         if (key.contains("ROAD") || key.contains("ICON") || key.contains("TYPE")) {
-                                            sb.append(key).append("=").append(b.get(key)).append("; ");
+                                            Object val = b.get(key);
+                                            sb.append(key).append("=").append(val).append("; ");
                                         }
                                     }
                                     if (sb.length() > 8) XposedBridge.log(sb.toString());
@@ -250,23 +254,16 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🌟🌟🌟 核心修复：全反射 API Hook 🌟🌟🌟
-    // 不引入任何东软的类，彻底规避 Class Verifier 导致的崩溃
+    // 压制 Log 警告
+    @SuppressWarnings("deprecation")
     private void hookApiByReflection(XC_LoadPackage.LoadPackageParam lpparam, String procName) {
         try {
-            // 使用字符串查找类
             Class<?> apiClass = XposedHelpers.findClassIfExists("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
-            if (apiClass == null) {
-                XposedBridge.log("NaviHook: [" + procName + "] 未找到 API 类 (正常现象，Widget无需Hook)");
-                return;
-            }
+            if (apiClass == null) return; // 安静退出，不打印 Log 以减少噪音
             
-            // 查找回调类 (作为方法参数)
-            // 注意：虽然这里查找了，但只要我们不显式地在代码里通过 import 引用它，就不会触发 Widget 崩溃
             Class<?> cbClass = XposedHelpers.findClassIfExists("com.neusoft.nts.ecarxnavsdk.IAPIGetGuideInfoCallBack", lpparam.classLoader);
             if (cbClass == null) return;
 
-            // Hook 方法
             XposedHelpers.findAndHookMethod(apiClass, "getGuideInfo", cbClass, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -276,7 +273,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             String safeNext = (nextRoadName == null) ? "" : nextRoadName;
                             String safeCur = (curRoadName == null) ? "" : curRoadName;
                             
-                            // 全反射调用，不强转
                             XposedHelpers.callMethod(callback, "getGuideInfoResult",
                                 1, routeRemainDis, routeRemainTime, 0, 0, 0,
                                 safeNext, safeNext, 
