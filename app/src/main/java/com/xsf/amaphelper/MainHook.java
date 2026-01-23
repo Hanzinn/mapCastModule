@@ -2,6 +2,7 @@ package com.xsf.amaphelper;
 
 import android.app.Application;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName; // 👈 必须要有这一行，否则编译必挂
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -9,7 +10,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import java.util.Set; 
-import java.util.Arrays; // 导入 Arrays
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
@@ -66,11 +66,13 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {}
 
+        // 只有 LBSNavi 才执行 API Hook (全反射安全模式)
         if (procName.equals("LBSNavi")) {
             hookApiByReflection(lpparam, procName);
         }
     }
 
+    // 🌟 加上 final 关键字，防止匿名内部类访问错误
     private void registerReceiver(final Context context, final String procName) {
         try {
             BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -80,12 +82,10 @@ public class MainHook implements IXposedHookLoadPackage {
                         String action = intent.getAction();
                         
                         if (AMAP_ACTION.equals(action)) {
+                            // 降噪: 过滤 10065 GPS 包
                             int keyType = intent.getIntExtra("KEY_TYPE", 0);
-                            
-                            // 降噪: 过滤 10065 (GPS)
                             if (keyType == 10065) return; 
 
-                            // 报活
                             if (!isServiceHeartbeatRunning && procName.equals("LBSNavi")) {
                                 startServiceHeartbeat(ctx);
                             }
@@ -93,15 +93,19 @@ public class MainHook implements IXposedHookLoadPackage {
 
                             Bundle b = intent.getExtras();
                             if (b != null) {
-                                b.keySet(); // 强制解包
+                                // 🌟 强制解包
+                                b.keySet(); 
 
-                                // 🌟🌟🌟 V71 核心：深海探针 🌟🌟🌟
-                                // 如果是 10001 (导航包) 或 10019 (巡航包)，强制打印所有内容，不管采样率
-                                if (procName.equals("Widget")) {
-                                    boolean isNaviPacket = (keyType == 10001 || keyType == 10019);
-                                    if (isNaviPacket || Math.random() < logSamplingRate) {
-                                        printFullBundle(b, keyType);
+                                // 日志探针 (仅在 Widget 进程打印)
+                                if (procName.equals("Widget") && Math.random() < logSamplingRate) {
+                                    StringBuilder sb = new StringBuilder("🔍 有效包: ");
+                                    for (String key : b.keySet()) {
+                                        if (key.contains("ROAD") || key.contains("ICON") || key.contains("TYPE")) {
+                                            Object val = b.get(key);
+                                            sb.append(key).append("=").append(val).append("; ");
+                                        }
                                     }
+                                    if (sb.length() > 8) XposedBridge.log(sb.toString());
                                 }
 
                                 extractData(b);
@@ -111,9 +115,13 @@ public class MainHook implements IXposedHookLoadPackage {
                         else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
                             int newVendor = intent.getIntExtra("vendor", -1);
                             currentVendor = (newVendor == -1) ? 2 : newVendor;
+                            
+                            // 强制注入测试数据
                             curRoadName = "测试道路 V" + currentVendor;
                             nextRoadName = "前方左转";
-                            turnIcon = 4; segmentDis = 500;
+                            turnIcon = 4; 
+                            segmentDis = 500;
+                            
                             XposedBridge.log("NaviHook: [" + procName + "] 强制注入测试数据");
                             sendInternalWakeUp(ctx);
                         }
@@ -142,40 +150,8 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🌟 V71 新增：深度打印逻辑
-    private void printFullBundle(Bundle b, int keyType) {
-        StringBuilder sb = new StringBuilder("🔍 [KEY=" + keyType + "] 深度解析: ");
-        try {
-            for (String key : b.keySet()) {
-                Object value = b.get(key);
-                sb.append(key).append("=");
-                if (value == null) {
-                    sb.append("null");
-                } else if (value instanceof byte[]) {
-                    // 如果是字节数组，打印前10个字节的 Hex，看看是不是二进制数据
-                    byte[] bytes = (byte[]) value;
-                    sb.append("[BYTE_ARRAY_").append(bytes.length).append("]");
-                    // 简单的 Hex 预览
-                    /* sb.append("(");
-                    for (int i = 0; i < Math.min(bytes.length, 10); i++) {
-                        sb.append(String.format("%02X", bytes[i]));
-                    }
-                    sb.append("...)"); 
-                    */
-                } else {
-                    sb.append(value.toString());
-                }
-                sb.append("; ");
-            }
-            XposedBridge.log(sb.toString());
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: 打印出错: " + t);
-        }
-    }
-
     private void extractData(Bundle b) {
         try {
-            // 尝试常规 Key
             if (b.containsKey("CUR_ROAD_NAME")) curRoadName = b.getString("CUR_ROAD_NAME");
             else if (b.containsKey("cur_road_name")) curRoadName = b.getString("cur_road_name");
             else if (b.containsKey("ROAD_NAME")) curRoadName = b.getString("ROAD_NAME");
@@ -209,6 +185,7 @@ public class MainHook implements IXposedHookLoadPackage {
         Intent iRefresh = new Intent("ecarx.navi.REFRESH_WIDGET");
         iRefresh.setPackage(PKG_WIDGET);
         ctx.sendBroadcast(iRefresh);
+        
         Intent iStatus = new Intent("ecarx.navi.UPDATE_STATUS");
         iStatus.putExtra("status", 1); 
         iStatus.putExtra("is_navi", true);
@@ -250,6 +227,7 @@ public class MainHook implements IXposedHookLoadPackage {
             if (mgr != null) {
                 Object conn = XposedHelpers.getObjectField(mgr, "i");
                 if (conn != null) {
+                    // 🌟 之前报错就是因为这里用了 ComponentName 但没导包
                     XposedHelpers.callMethod(conn, "onServiceConnected", new ComponentName("f","f"), null);
                 }
             }
@@ -277,7 +255,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private void hookApiByReflection(XC_LoadPackage.LoadPackageParam lpparam, String procName) {
         try {
             Class<?> apiClass = XposedHelpers.findClassIfExists("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
-            if (apiClass == null) return; 
+            if (apiClass == null) return;
+            
             Class<?> cbClass = XposedHelpers.findClassIfExists("com.neusoft.nts.ecarxnavsdk.IAPIGetGuideInfoCallBack", lpparam.classLoader);
             if (cbClass == null) return;
 
