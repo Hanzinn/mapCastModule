@@ -39,7 +39,10 @@ public class MainHook implements IXposedHookLoadPackage {
     private static int segmentDis = 0;
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
-    private static int currentVendor = 2;
+    
+    // 🌟 核心变量：这个值现在由 App 按钮控制！
+    // 1=高德/通用, 2=亿咖通/百度, 4=东软/吉利
+    private static int currentVendor = 2; 
 
     // 对象引用
     private static Object dashboardManagerInstance = null;
@@ -56,7 +59,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V78 虚空造物模式启动");
+        XposedBridge.log("NaviHook: 🚀 V79 万能钥匙模式启动");
         
         initLBSHook(lpparam);
         hookNaviBaseModel(lpparam.classLoader);
@@ -88,6 +91,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) {
+                        // 强制统一口径
                         return currentVendor > 0 ? currentVendor : 1; 
                     }
                 });
@@ -97,17 +101,13 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void captureCoreObjects(ClassLoader cl) {
         try {
-            // 1. 预加载 NaviInfo 类
             if (naviInfoClass == null) {
                 naviInfoClass = XposedHelpers.findClassIfExists(CLASS_NAVI_INFO, cl);
                 if (naviInfoClass != null) {
                     XposedBridge.log("NaviHook: ✅ 找到 NaviInfo 类");
-                } else {
-                    XposedBridge.log("NaviHook: ❌ 致命错误：未找到 " + CLASS_NAVI_INFO);
                 }
             }
 
-            // 2. 捕获 Manager 和 Interaction
             Class<?> mgrClass = XposedHelpers.findClass(CLASS_DASHBOARD_MGR, cl);
             Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE);
             instanceField.setAccessible(true);
@@ -148,10 +148,19 @@ public class MainHook implements IXposedHookLoadPackage {
                                 else captureCoreObjects(context.getClassLoader());
                             }
                         }
+                        // 🔥 监听 App 的 Vendor 切换指令
+                        else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
+                             int v = intent.getIntExtra("vendor", 2);
+                             currentVendor = (v == -1) ? 2 : v;
+                             XposedBridge.log("NaviHook: 🔄 切换暗号 (Type) 为: " + currentVendor);
+                             
+                             // 立即刷新一发，看看效果
+                             curRoadName = "测试模式 Type=" + currentVendor;
+                             updateClusterDirectly();
+                        }
                         else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
                             captureCoreObjects(context.getClassLoader());
-                            curRoadName = "强制测试 V78";
-                            turnIcon = 2;
+                            curRoadName = "强制重连 V79";
                             updateClusterDirectly();
                         }
                     } catch (Throwable t) {}
@@ -160,17 +169,17 @@ public class MainHook implements IXposedHookLoadPackage {
             
             IntentFilter filter = new IntentFilter();
             filter.addAction(AMAP_ACTION);
+            filter.addAction("XSF_ACTION_SET_VENDOR"); // 👈 关键
             filter.addAction("XSF_ACTION_FORCE_CONNECT");
             context.registerReceiver(receiver, filter);
         } catch (Throwable t) {}
     }
 
-    // 🔥 V78 核心：使用 Unsafe 强行实例化对象
+    // 🔥 V79 核心：动态 Type 注入
     private void updateClusterDirectly() {
         if (naviInteractionInstance == null || naviInfoClass == null) return;
         
         try {
-            // 🌟🌟🌟 重点：绕过构造函数实例化 🌟🌟🌟
             Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
             Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
             theUnsafe.setAccessible(true);
@@ -178,20 +187,23 @@ public class MainHook implements IXposedHookLoadPackage {
             Method allocateInstance = unsafeClass.getMethod("allocateInstance", Class.class);
             Object naviInfoObj = allocateInstance.invoke(unsafe, naviInfoClass);
 
-            // 2. 智能填充数据 (Fuzzy Fill)
+            // 1. 基础数据
             fuzzySetField(naviInfoObj, "current", curRoadName); 
             fuzzySetField(naviInfoObj, "curRoad", curRoadName);
-
             fuzzySetField(naviInfoObj, "next", nextRoadName);
-            
             fuzzySetField(naviInfoObj, "icon", turnIcon);
-            fuzzySetField(naviInfoObj, "type", 1);
-            fuzzySetField(naviInfoObj, "status", 1);
-
+            fuzzySetField(naviInfoObj, "status", 1); // 1=Navigating
             fuzzySetField(naviInfoObj, "distance", segmentDis);
             fuzzySetField(naviInfoObj, "remain", routeRemainDis);
 
-            // 3. 调用 updateNaviInfo(NaviInfo)
+            // 🌟 2. 关键暗号：使用 currentVendor 变量
+            fuzzySetField(naviInfoObj, "type", currentVendor); 
+            // 有些车型字段叫 source
+            fuzzySetField(naviInfoObj, "source", currentVendor); 
+            // 有些车型字段叫 vendor
+            fuzzySetField(naviInfoObj, "vendor", currentVendor); 
+
+            // 3. 发射！
             XposedHelpers.callMethod(naviInteractionInstance, "updateNaviInfo", naviInfoObj);
             
             // 4. 双保险
@@ -199,7 +211,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedHelpers.callMethod(naviInteractionInstance, "updateTurnByTurnArrow", turnIcon);
             } catch (Throwable t) {}
 
-            XposedBridge.log("NaviHook: 💉 虚空注入成功: " + curRoadName);
+            XposedBridge.log("NaviHook: 💉 注入成功: " + curRoadName + " [Type=" + currentVendor + "]");
 
         } catch (Throwable t) {
             XposedBridge.log("NaviHook: 注入失败: " + t);
@@ -215,11 +227,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (name.contains(keyword.toLowerCase())) {
                     if (value instanceof Integer && (f.getType() == int.class || f.getType() == Integer.class)) {
                         f.set(obj, value);
-                        return; 
+                        // 稍微多试几次，防止只填了一个字段
                     }
                     if (value instanceof String && f.getType() == String.class) {
                         f.set(obj, value);
-                        return;
+                        // String 类型通常只有一个匹配的，填完返回
+                        return; 
                     }
                 }
             }
@@ -253,6 +266,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private void hookApiByReflection(XC_LoadPackage.LoadPackageParam lpparam) {
+        // API Hook 保留
          try {
             Class<?> apiClass = XposedHelpers.findClassIfExists("com.neusoft.nts.ecarxnavsdk.EcarxOpenApi", lpparam.classLoader);
             if (apiClass == null) return;
