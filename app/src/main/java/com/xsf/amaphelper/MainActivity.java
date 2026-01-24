@@ -24,15 +24,17 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     
-    private TextView tvLog, tvLsp, tvHook, tvWidget, tvSvc, tvIpc;
+    // UI 控件 (移除了 tvWidget)
+    private TextView tvLog, tvLsp, tvHook, tvSvc, tvIpc;
     private Button btnAuto, btnV1, btnV4, btnSample, btnPause;
     private ScrollView scrollView;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
-    // 🔥 控制状态
+    // 状态变量
     private boolean isPaused = false;
-    private boolean isFullSample = false; // false=10%, true=100%
+    private boolean isHighSampling = false; 
 
+    // 伪装方法
     public boolean isModuleActive() { return false; }
 
     private BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -41,26 +43,28 @@ public class MainActivity extends Activity {
             String log = intent.getStringExtra("log");
             if (log == null) return;
             
-            // 🟢 状态灯逻辑 (不受暂停影响，始终更新)
+            // 状态灯更新
             if (log.contains("STATUS_HOOK_READY")) setStatus(tvHook, "服务Hook: ✅");
-            else if (log.contains("STATUS_WIDGET_READY")) setStatus(tvWidget, "组件Hook: ✅");
+            // 注意：STATUS_WIDGET_READY 已被移除，不再处理
             else if (log.contains("STATUS_SERVICE_RUNNING")) setStatus(tvSvc, "运行: ✅");
             else if (log.contains("STATUS_IPC_CONNECTED")) {
                 setStatus(tvIpc, "链路IPC: ✅");
-                appendLog(">>> 🎉 物理链路已打通！ <<<");
+                appendLog(">>> 🎉 物理链路已打通！ <<<", true);
             } 
             else {
-                // 普通日志受暂停控制
+                // 普通日志：如果暂停了，就不显示
                 if (!isPaused) {
-                    appendLog(log);
+                    appendLog("模块: " + log, false);
                 }
             }
         }
     };
 
     private void setStatus(TextView tv, String text) {
-        tv.setText(text);
-        tv.setTextColor(Color.GREEN);
+        if (tv != null) {
+            tv.setText(text);
+            tv.setTextColor(Color.GREEN);
+        }
     }
 
     @Override
@@ -75,10 +79,11 @@ public class MainActivity extends Activity {
             }
         }
 
+        // 初始化视图
         tvLog = findViewById(R.id.tv_log);
         tvLsp = findViewById(R.id.tv_lsp_status);
         tvHook = findViewById(R.id.tv_hook_status);
-        tvWidget = findViewById(R.id.tv_widget_status);
+        // tvWidget = findViewById(R.id.tv_widget_status); // 已删除
         tvSvc = findViewById(R.id.tv_service_status);
         tvIpc = findViewById(R.id.tv_ipc_status);
         scrollView = findViewById(R.id.scrollView);
@@ -86,25 +91,61 @@ public class MainActivity extends Activity {
         btnAuto = findViewById(R.id.btn_vendor_auto);
         btnV1 = findViewById(R.id.btn_vendor_1);
         btnV4 = findViewById(R.id.btn_vendor_4);
-        btnSample = findViewById(R.id.btn_toggle_sample);
-        btnPause = findViewById(R.id.btn_toggle_pause);
+        
+        btnSample = findViewById(R.id.btn_sample_rate);
+        btnPause = findViewById(R.id.btn_pause_log);
 
         registerReceiver(receiver, new IntentFilter("com.xsf.amaphelper.LOG_UPDATE"));
 
+        // 采样率切换
+        btnSample.setOnClickListener(v -> {
+            isHighSampling = !isHighSampling;
+            double rate = isHighSampling ? 1.0 : 0.1;
+            
+            Intent i = new Intent("XSF_ACTION_SET_SAMPLE_RATE");
+            i.putExtra("rate", rate);
+            sendBroadcast(i);
+            
+            if (isHighSampling) {
+                btnSample.setText("采样: 100%");
+                btnSample.setBackgroundColor(Color.parseColor("#C62828"));
+                appendLog("指令: 开启全量日志 (100%)", true);
+            } else {
+                btnSample.setText("采样: 10%");
+                btnSample.setBackgroundColor(Color.parseColor("#555555"));
+                appendLog("指令: 开启低频采样 (10%)", true);
+            }
+        });
+
+        // 暂停/继续
+        btnPause.setOnClickListener(v -> {
+            isPaused = !isPaused;
+            if (isPaused) {
+                btnPause.setText("▶ 继续");
+                btnPause.setBackgroundColor(Color.parseColor("#4CAF50"));
+                appendLog("--- 日志已暂停采集 ---", true);
+            } else {
+                btnPause.setText("⏸ 暂停");
+                btnPause.setBackgroundColor(Color.parseColor("#FF9800"));
+                appendLog("--- 日志恢复采集 ---", true);
+            }
+        });
+
+        // 功能按钮
         findViewById(R.id.btn_start_service).setOnClickListener(v -> {
             tvSvc.setText("运行: ⏳"); tvSvc.setTextColor(Color.YELLOW);
             tvIpc.setText("链路: ⏳"); tvIpc.setTextColor(Color.YELLOW);
-            appendLog("步骤1: 发送冷启动指令...");
+            appendLog("步骤1: 发送冷启动指令...", true);
             sendBroadcast(new Intent("XSF_ACTION_START_SERVICE"));
         });
 
         findViewById(R.id.btn_force_connect).setOnClickListener(v -> {
-            appendLog("步骤2: 手动执行 B 计划...");
+            appendLog("步骤2: 手动执行 B 计划...", true);
             sendBroadcast(new Intent("XSF_ACTION_FORCE_CONNECT"));
         });
 
         findViewById(R.id.btn_activate).setOnClickListener(v -> {
-            appendLog("步骤3: 发送激活连招...");
+            appendLog("步骤3: 发送激活连招...", true);
             sendStatus(13); 
             updateVendorButtonUI(-1);
             Intent i = new Intent("XSF_ACTION_SET_VENDOR");
@@ -113,49 +154,21 @@ public class MainActivity extends Activity {
         });
 
         btnAuto.setOnClickListener(v -> {
-            sendVendorCmd(-1); 
-            appendLog("指令: 恢复默认 (Vendor 2)");
-            updateVendorButtonUI(-1);
+            sendVendorCmd(2); // 默认为 2
+            appendLog("指令: 恢复默认 (Vendor 2)", true);
+            updateVendorButtonUI(2);
         });
 
         btnV1.setOnClickListener(v -> {
             sendVendorCmd(1);
-            appendLog("指令: 强制锁定 [Vendor 1]");
+            appendLog("指令: 强制锁定 [Vendor 1]", true);
             updateVendorButtonUI(1);
         });
 
         btnV4.setOnClickListener(v -> {
             sendVendorCmd(4);
-            appendLog("指令: 强制锁定 [Vendor 4]");
+            appendLog("指令: 强制锁定 [Vendor 4]", true);
             updateVendorButtonUI(4);
-        });
-        
-        // 🔥 采样率切换逻辑
-        btnSample.setOnClickListener(v -> {
-            isFullSample = !isFullSample;
-            double rate = isFullSample ? 1.0 : 0.1;
-            
-            // 发送指令给 Hook
-            Intent i = new Intent("XSF_ACTION_SET_SAMPLE_RATE");
-            i.putExtra("rate", rate);
-            sendBroadcast(i);
-            
-            // 更新按钮UI
-            btnSample.setText(isFullSample ? "采样:100%" : "采样:10%");
-            btnSample.setBackgroundColor(isFullSample ? Color.RED : Color.parseColor("#FF9800"));
-            appendLog("⚙️ 采样率已更改为: " + (isFullSample ? "100% (全量)" : "10% (精简)"));
-        });
-
-        // 🔥 暂停/恢复逻辑
-        btnPause.setOnClickListener(v -> {
-            isPaused = !isPaused;
-            btnPause.setText(isPaused ? "恢复" : "暂停");
-            btnPause.setBackgroundColor(isPaused ? Color.GREEN : Color.parseColor("#9E9E9E"));
-            if (isPaused) {
-                appendLog("⏸️ 日志已暂停滚动 (后台仍在记录)");
-            } else {
-                appendLog("▶️ 日志恢复滚动");
-            }
         });
 
         findViewById(R.id.btn_save_log).setOnClickListener(v -> saveLogToFile());
@@ -168,9 +181,13 @@ public class MainActivity extends Activity {
     }
 
     private void updateVendorButtonUI(int mode) {
-        btnAuto.setBackgroundColor(mode == -1 ? Color.parseColor("#FF4081") : Color.parseColor("#673AB7"));
-        btnV1.setBackgroundColor(mode == 1 ? Color.parseColor("#FF4081") : Color.parseColor("#555555"));
-        btnV4.setBackgroundColor(mode == 4 ? Color.parseColor("#FF4081") : Color.parseColor("#555555"));
+        int activeColor = Color.parseColor("#FF4081");
+        int normalColor = Color.parseColor("#555555");
+        int autoColor = Color.parseColor("#673AB7");
+
+        btnAuto.setBackgroundColor(mode == 2 ? activeColor : autoColor);
+        btnV1.setBackgroundColor(mode == 1 ? activeColor : normalColor);
+        btnV4.setBackgroundColor(mode == 4 ? activeColor : normalColor);
     }
 
     private void sendStatus(int s) {
@@ -183,54 +200,41 @@ public class MainActivity extends Activity {
         String logContent = tvLog.getText().toString();
         if (logContent.isEmpty()) return;
         File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AmapHelper_Logs");
-        boolean success = trySaveToDir(dir, logContent);
-        if (!success) {
-            File rootDir = new File(Environment.getExternalStorageDirectory(), "AmapHelper_Logs");
-            success = trySaveToDir(rootDir, logContent);
-        }
-        if (!success) {
-            Toast.makeText(this, "保存失败，请检查权限", Toast.LENGTH_LONG).show();
-            appendLog("❌ 保存失败");
-        }
+        trySaveToDir(dir, logContent);
     }
 
     private boolean trySaveToDir(File dir, String content) {
         try {
-            if (!dir.exists() && !dir.mkdirs()) return false;
+            if (!dir.exists()) dir.mkdirs();
             String fileName = "Log_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date()) + ".txt";
             File file = new File(dir, fileName);
             FileOutputStream fos = new FileOutputStream(file);
             fos.write(content.getBytes());
             fos.close();
             Toast.makeText(this, "保存成功", Toast.LENGTH_SHORT).show();
-            appendLog("✅ 日志已保存: " + file.getAbsolutePath());
+            appendLog("✅ 已保存: " + file.getAbsolutePath(), true);
             return true;
         } catch (Exception e) {
+            appendLog("❌ 保存失败: " + e.getMessage(), true);
             return false;
         }
     }
 
-    // 🔥 增强版日志追加：解决自动清屏问题
-    private void appendLog(String m) {
-        runOnUiThread(() -> {
-            if (tvLog != null) {
-                tvLog.append("[" + sdf.format(new Date()) + "] " + m + "\n");
-                
-                // 🛡️ 缓冲区保护：如果字符数超过 50000，删掉最老的 10000 个字符
-                // 这样能永远保持最新的日志，而不会因为 OOM 导致清屏
-                if (tvLog.getText().length() > 50000) {
-                    String fullText = tvLog.getText().toString();
-                    int cutIndex = fullText.indexOf("\n", 10000); // 找到换行符，避免截断一半
-                    if (cutIndex != -1) {
-                        tvLog.setText(fullText.substring(cutIndex + 1));
+    // 防清屏 + 缓冲区保护
+    private void appendLog(String m, boolean force) {
+        if (force || !isPaused) {
+            runOnUiThread(() -> {
+                if (tvLog != null) {
+                    if (tvLog.length() > 50000) {
+                        String current = tvLog.getText().toString();
+                        tvLog.setText(current.substring(10000));
+                        tvLog.append("\n[系统] 缓冲区自动清理 (保留最新日志)...\n");
                     }
+                    tvLog.append("[" + sdf.format(new Date()) + "] " + m + "\n");
+                    if (scrollView != null) scrollView.post(() -> scrollView.fullScroll(ScrollView.FOCUS_DOWN));
                 }
-
-                if (scrollView != null && !isPaused) { // 暂停时不自动滚动
-                    scrollView.post(() -> scrollView.fullScroll(ScrollView.FOCUS_DOWN));
-                }
-            }
-        });
+            });
+        }
     }
 
     @Override
@@ -247,3 +251,4 @@ public class MainActivity extends Activity {
         unregisterReceiver(receiver);
     }
 }
+
