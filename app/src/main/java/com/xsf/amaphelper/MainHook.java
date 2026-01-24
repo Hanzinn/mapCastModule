@@ -36,13 +36,16 @@ public class MainHook implements IXposedHookLoadPackage {
     private static int segmentDis = 0;
     private static int routeRemainDis = 0;
     private static int routeRemainTime = 0;
-    private static int currentVendor = 2; 
+    
+    // 🌟 V86 默认配置
+    private static int currentVendor = 0; // 默认 V0 (高德)
+    private static int currentStatus = 1; // 默认 S1 (开始导航)
 
     private static Object dashboardManagerInstance = null;
     private static Object naviInteractionInstance = null;
     private static Class<?> naviInfoClass = null; 
     private static boolean isHookReady = false;
-    private static Context systemContext = null; // 用于发信号
+    private static Context systemContext = null;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -53,7 +56,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V81 光明重现版启动");
+        XposedBridge.log("NaviHook: 🚀 V86 逻辑闭环版启动");
         
         initLBSHook(lpparam);
         hookNaviBaseModel(lpparam.classLoader);
@@ -67,10 +70,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     Context context = (Context) param.thisObject;
                     systemContext = context;
                     registerReceiver(context);
-                    
-                    // 🟢 修复：发送服务启动信号
                     sendAppLog("STATUS_SERVICE_RUNNING");
-                    sendAppLog("NaviHook V81 已就绪，等待核心捕获...");
                     
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                          captureCoreObjects(lpparam.classLoader);
@@ -87,13 +87,13 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Class<?> baseModelClass = XposedHelpers.findClassIfExists(CLASS_NAVI_BASE_MODEL, cl);
             if (baseModelClass != null) {
+                // 欺诈模块：始终返回当前选定的 Vendor
                 XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) {
-                        return currentVendor > 0 ? currentVendor : 1; 
+                        return currentVendor; 
                     }
                 });
-                // 🟢 修复：发送 Hook 就绪信号
                 sendAppLog("STATUS_HOOK_READY");
             }
         } catch (Throwable t) {}
@@ -117,10 +117,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 
                 if (naviInteractionInstance != null) {
                     XposedBridge.log("NaviHook: 🎉 捕获硬件接口!");
-                    // 🟢 修复：发送链路打通信号
                     sendAppLog("STATUS_IPC_CONNECTED");
-                    sendAppLog("🎉 核心控制权已夺取！");
                     isHookReady = true;
+                    // 连接成功，自动握手一次
                     updateClusterDirectly(); 
                 }
             }
@@ -140,9 +139,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             int keyType = intent.getIntExtra("KEY_TYPE", 0);
                             if (keyType == 10065) return; 
 
-                            // 🟢 修复：明确告知收到了广播
-                            if (Math.random() < 0.05) sendAppLog("📡 收到高德数据包...");
-
                             Bundle b = intent.getExtras();
                             if (b != null) {
                                 b.keySet();
@@ -152,18 +148,22 @@ public class MainHook implements IXposedHookLoadPackage {
                             }
                         }
                         else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                             int v = intent.getIntExtra("vendor", 2);
-                             currentVendor = (v == -1) ? 2 : v;
-                             sendAppLog("🔄 切换协议 -> Type " + currentVendor);
-                             curRoadName = "协议测试 " + currentVendor;
+                             currentVendor = intent.getIntExtra("vendor", 0);
+                             sendAppLog("🔄 切 Vendor -> " + currentVendor);
+                             curRoadName = "测试 V" + currentVendor + "/S" + currentStatus;
+                             updateClusterDirectly();
+                        }
+                        else if ("XSF_ACTION_SET_STATUS".equals(action)) {
+                             currentStatus = intent.getIntExtra("status", 1);
+                             sendAppLog("🔄 切 State -> " + currentStatus);
+                             curRoadName = "测试 V" + currentVendor + "/S" + currentStatus;
                              updateClusterDirectly();
                         }
                         else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
                             captureCoreObjects(context.getClassLoader());
-                            curRoadName = "强制重连 V81";
+                            curRoadName = "激活测试 V86";
                             updateClusterDirectly();
                         }
-                        // 🟢 修复：响应状态查询
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
                             if (systemContext != null) {
                                 sendAppLog("STATUS_HOOK_READY");
@@ -178,16 +178,29 @@ public class MainHook implements IXposedHookLoadPackage {
             IntentFilter filter = new IntentFilter();
             filter.addAction(AMAP_ACTION);
             filter.addAction("XSF_ACTION_SET_VENDOR");
+            filter.addAction("XSF_ACTION_SET_STATUS");
             filter.addAction("XSF_ACTION_FORCE_CONNECT");
             filter.addAction("XSF_ACTION_SEND_STATUS");
             context.registerReceiver(receiver, filter);
         } catch (Throwable t) {}
     }
 
+    // 🔥 V86 核心逻辑：修正 GuideType 冲突
     private void updateClusterDirectly() {
         if (naviInteractionInstance == null || naviInfoClass == null) return;
         
         try {
+            // 🌟 1. 解决先决条件：先通知 TBT 开始
+            try {
+                // 这是打开仪表盘大门的钥匙
+                XposedHelpers.callMethod(naviInteractionInstance, "notifyTurnByTurnStarted");
+                // 顺便刷一下箭头
+                XposedHelpers.callMethod(naviInteractionInstance, "updateTurnByTurnArrow", turnIcon > 0 ? turnIcon : 2);
+            } catch (Throwable t) {
+                // 忽略异常，继续尝试注入
+            }
+
+            // 🌟 2. 虚空造物
             Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
             Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
             theUnsafe.setAccessible(true);
@@ -195,25 +208,32 @@ public class MainHook implements IXposedHookLoadPackage {
             Method allocateInstance = unsafeClass.getMethod("allocateInstance", Class.class);
             Object naviInfoObj = allocateInstance.invoke(unsafe, naviInfoClass);
 
+            // 🌟 3. 基础数据填充
             fuzzySetField(naviInfoObj, "current", curRoadName); 
             fuzzySetField(naviInfoObj, "curRoad", curRoadName);
             fuzzySetField(naviInfoObj, "next", nextRoadName);
             fuzzySetField(naviInfoObj, "icon", turnIcon);
-            fuzzySetField(naviInfoObj, "status", 1); 
             fuzzySetField(naviInfoObj, "distance", segmentDis);
             fuzzySetField(naviInfoObj, "remain", routeRemainDis);
-            fuzzySetField(naviInfoObj, "type", currentVendor); 
+            
+            // 🌟 4. 逻辑修正区 (User's Fix)
+            // 只要 Status 是 1 或 16 (都是导航中)，GuideType 必须是 0 (GPS)
+            // 只有当我们在做模拟导航或者巡航时，才设为 1 或 2。
+            // 既然我们要显示箭头，这里死锁为 0。
+            int guideType = 0; 
+            
+            fuzzySetField(naviInfoObj, "status", currentStatus);
+            fuzzySetField(naviInfoObj, "guideType", guideType); 
+            
+            // 🌟 5. Vendor 注入
+            fuzzySetField(naviInfoObj, "type", currentVendor);   
             fuzzySetField(naviInfoObj, "source", currentVendor); 
             fuzzySetField(naviInfoObj, "vendor", currentVendor); 
 
+            // 🌟 6. 发射！
             XposedHelpers.callMethod(naviInteractionInstance, "updateNaviInfo", naviInfoObj);
             
-            try {
-                XposedHelpers.callMethod(naviInteractionInstance, "updateTurnByTurnArrow", turnIcon);
-            } catch (Throwable t) {}
-
-            // 🟢 修复：发送注入成功信号
-            sendAppLog("💉 注入: " + curRoadName + " [Type=" + currentVendor + "]");
+            sendAppLog("💉 注入: [V" + currentVendor + "][S" + currentStatus + "][G" + guideType + "]");
 
         } catch (Throwable t) {
             sendAppLog("❌ 注入异常: " + t.getMessage());
