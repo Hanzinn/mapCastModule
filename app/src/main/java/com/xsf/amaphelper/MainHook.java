@@ -24,27 +24,27 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
-    // 核心管理类
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
     private static final String FIELD_INSTANCE = "b";
+    private static final String FIELD_INTERACTION = "d"; // 硬件接口字段名
     
-    // 🟢 重点：直接使用内部实体类 (你有它的smali，字段绝对正确)
+    // 🟢 内部实体类 (验证有效)
     private static final String CLASS_MAP_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
     private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel";
 
-    // 缓存数据
     private static String curRoadName = "系统就绪";
-    private static String nextRoadName = "等待导航";
-    private static int turnIcon = 4; // 右转
+    private static String nextRoadName = "V93测试";
+    // 🟢 强制默认值为 4 (右转)，防止 Icon=0 导致仪表不显
+    private static int turnIcon = 4; 
     private static int segmentDis = 500;
     private static int routeRemainDis = 2000;
     private static int routeRemainTime = 600;
     
-    // 默认 V0 (高德) + S1 (Start)
     private static int currentVendor = 0; 
     private static int currentStatus = 1; 
 
     private static Object dashboardManagerInstance = null;
+    private static Object naviInteractionInstance = null; // 硬件接口
     private static Class<?> mapGuideInfoClass = null; 
     
     private static boolean isHookReady = false;
@@ -59,7 +59,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V92 降维打击版启动");
+        XposedBridge.log("NaviHook: 🚀 V93 混合完美版启动");
         
         initLBSHook(lpparam);
         hookNaviBaseModel(lpparam.classLoader);
@@ -101,25 +101,29 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void captureCoreObjects(ClassLoader cl) {
         try {
-            // 1. 获取内部 MapGuideInfo 类
             mapGuideInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_GUIDE_INFO, cl);
             if (mapGuideInfoClass == null) {
                 sendAppLog("❌ 找不到 MapGuideInfo 类");
                 return;
             }
 
-            // 2. 获取 DashboardManager (a.a)
             Class<?> mgrClass = XposedHelpers.findClass(CLASS_DASHBOARD_MGR, cl);
             Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE);
             instanceField.setAccessible(true);
             dashboardManagerInstance = instanceField.get(null);
             
             if (dashboardManagerInstance != null) {
-                XposedBridge.log("NaviHook: 🎉 捕获管理器成功!");
+                // 🟢 同时获取硬件接口 (用于唤醒)
+                Field interactionField = XposedHelpers.findField(mgrClass, FIELD_INTERACTION);
+                interactionField.setAccessible(true);
+                naviInteractionInstance = interactionField.get(dashboardManagerInstance);
+
+                XposedBridge.log("NaviHook: 🎉 捕获成功!");
                 sendAppLog("STATUS_IPC_CONNECTED");
                 isHookReady = true;
-                // 自动激活
-                updateClusterDirectly(); 
+                
+                // 🟢 立即执行一次唤醒
+                ensureActiveState();
             } else {
                 sendAppLog("❌ 管理器未初始化");
             }
@@ -137,9 +141,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                         String action = intent.getAction();
                         if (AMAP_ACTION.equals(action)) {
-                            int keyType = intent.getIntExtra("KEY_TYPE", 0);
-                            if (keyType == 10065) return; 
-
                             Bundle b = intent.getExtras();
                             if (b != null) {
                                 b.keySet();
@@ -151,7 +152,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
                              currentVendor = intent.getIntExtra("vendor", 0);
                              sendAppLog("🔄 V -> " + currentVendor);
-                             updateClusterDirectly();
+                             ensureActiveState(); // 切换厂商必须重新唤醒
                         }
                         else if ("XSF_ACTION_SET_STATUS".equals(action)) {
                              currentStatus = intent.getIntExtra("status", 1);
@@ -160,12 +161,13 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                         else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
                             captureCoreObjects(context.getClassLoader());
+                            ensureActiveState(); // 强制唤醒
                             updateClusterDirectly();
                         }
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                            // 收到查询广播，再次发射状态
+                            // 心跳包，修复指示灯不亮
+                            sendAppLog("STATUS_SERVICE_RUNNING");
                             if (isHookReady) sendAppLog("STATUS_IPC_CONNECTED");
-                            else sendAppLog("STATUS_SERVICE_RUNNING");
                         }
                     } catch (Throwable t) {}
                 }
@@ -176,59 +178,68 @@ public class MainHook implements IXposedHookLoadPackage {
             filter.addAction("XSF_ACTION_SET_VENDOR");
             filter.addAction("XSF_ACTION_SET_STATUS");
             filter.addAction("XSF_ACTION_FORCE_CONNECT");
-            filter.addAction("XSF_ACTION_SEND_STATUS"); // 确保注册了这个
+            filter.addAction("XSF_ACTION_SEND_STATUS");
             context.registerReceiver(receiver, filter);
         } catch (Throwable t) {}
     }
 
-    // 🔥 V92 核心注入：构造 MapGuideInfo 并喂给 Manager
+    // 🟢 V93 新增：确保仪表盘处于 TBT 模式
+    private void ensureActiveState() {
+        if (naviInteractionInstance == null) return;
+        try {
+            // 1. 设置 Vendor
+            XposedHelpers.callMethod(naviInteractionInstance, "setMapType", currentVendor);
+            // 2. 发送开始信号 (唤醒仪表)
+            XposedHelpers.callMethod(naviInteractionInstance, "notifyTurnByTurnStarted");
+            // 3. 补刀：有些机型需要 notifyStartNavigation
+            try {
+                XposedHelpers.callMethod(naviInteractionInstance, "notifyStartNavigation");
+            } catch (Throwable t) {}
+            
+            sendAppLog("⚡ 已发送唤醒信号");
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: 唤醒失败 " + t);
+        }
+    }
+
+    // 🔥 V93 核心注入：内部注入 + 强制数据
     private void updateClusterDirectly() {
         if (dashboardManagerInstance == null || mapGuideInfoClass == null) return;
         
         try {
-            // 🟢 1. 构造内部对象 MapGuideInfo (使用带参构造)
+            // 1. 确保唤醒 (防止仪表休眠)
+            ensureActive🟢State();
+
+            // 2. 构造内部对象
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
 
-            // 🟢 2. 精确填充 (字段名来自 smali)
+            // 3. 🟢 强制非零数据 (针对 V92 Icon:0 的修复)
+            int finalIcon = (turnIcon == 0) ? 4 : turnIcon; // 如果是0，强转为右转(4)
+            int finalDis = (segmentDis == 0) ? 500 : segmentDis;
+
+            // 4. 精确填充
             XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
             
-            // 真实字段名
-            XposedHelpers.setIntField(guideInfo, "turnId", turnIcon); 
-            XposedHelpers.setIntField(guideInfo, "nextTurnDistance", segmentDis);
+            XposedHelpers.setIntField(guideInfo, "turnId", finalIcon); 
+            XposedHelpers.setIntField(guideInfo, "nextTurnDistance", finalDis);
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
             
-            // 状态控制
             XposedHelpers.setIntField(guideInfo, "guideType", 0); // 0=GPS
-            // 注意：MapGuideInfo 可能没有 status 字段，status 通常在 MapStatusInfo 里
-            // 但我们先把 guideType 设对。
             
-            // 🟢 3. 核心调用：DashboardManager.a(MapGuideInfo)
-            // 在 a.java 中，有一个方法接收 MapGuideInfo。
-            // 由于混淆，它可能叫 'a'。Xposed 会自动匹配参数类型。
-            try {
-                XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-                
-                // 🟢 4. 补充调用：模拟状态变更
-                // a.java 中 case 1002 是处理状态的。我们需要构造 MapStatusInfo
-                // 但简单起见，我们假设 DashboardManager 会自动处理
-                
-            } catch (NoSuchMethodError e) {
-                // 如果找不到 'a'，尝试 'b' 或其他单参数且参数为 MapGuideInfo 的方法
-                // 这里我们盲猜 'a' 因为反编译代码里它是 a(MapGuideInfo)
-                sendAppLog("❌ 方法名不对，Manager 拒绝接收");
-            }
+            // 5. 注入给管理器
+            XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
 
-            sendAppLog("💉 V92: Internal Inject [V" + currentVendor + "][Icon:" + turnIcon + "]");
+            sendAppLog("💉 V93: [V" + currentVendor + "][Icon:" + finalIcon + "] Success!");
 
         } catch (Throwable t) {
-            // 这里会打印详细错误，如果是因为字段找不到，这里会报 NoSuchField
             sendAppLog("❌ 注入异常: " + t.getMessage());
             XposedBridge.log(t);
         }
     }
     
+    // 🟢 修正：增加对 0 值的宽容处理
     private void extractData(Bundle b) {
         try {
             if (b.containsKey("CUR_ROAD_NAME")) curRoadName = b.getString("CUR_ROAD_NAME");
@@ -236,7 +247,6 @@ public class MainHook implements IXposedHookLoadPackage {
             else if (b.containsKey("ROAD_NAME")) curRoadName = b.getString("ROAD_NAME");
             
             if (b.containsKey("NEXT_ROAD_NAME")) nextRoadName = b.getString("NEXT_ROAD_NAME");
-            else if (b.containsKey("next_road_name")) nextRoadName = b.getString("next_road_name");
             
             segmentDis = getInt(b, "SEG_REMAIN_DIS", "seg_remain_dis");
             turnIcon = getInt(b, "ICON", "icon");
@@ -246,11 +256,10 @@ public class MainHook implements IXposedHookLoadPackage {
             routeRemainTime = getInt(b, "ROUTE_REMAIN_TIME", "route_remain_time");
 
             if (curRoadName == null) curRoadName = "当前道路";
-            if (nextRoadName == null) nextRoadName = "";
             
-            if (turnIcon > 0 && currentStatus != 1) {
-                 currentStatus = 1;
-            }
+            // 🟢 V93 只要收到数据，就视为活跃
+            if (currentStatus != 1) currentStatus = 1;
+            
         } catch (Exception e) {}
     }
     
@@ -260,7 +269,6 @@ public class MainHook implements IXposedHookLoadPackage {
         return (v == -1) ? 0 : v;
     }
 
-    // 🟢 通讯修复版
     private void sendAppLog(String log) {
         if (systemContext != null) {
             try {
