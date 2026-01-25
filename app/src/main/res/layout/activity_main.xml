@@ -13,10 +13,38 @@
         android:padding="10dp"
         android:layout_marginBottom="8dp">
         
-        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="14sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务Hook" android:textColor="#FF0000" android:gravity="center" android:textSize="14sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="运行" android:textColor="#FF0000" android:gravity="center" android:textSize="14sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0" android:visibility="gone"/>
+        <TextView 
+            android:id="@+id/tv_lsp_status" 
+            android:layout_width="0dp" 
+            android:layout_height="wrap_content" 
+            android:layout_weight="1" 
+            android:text="LSP" 
+            android:textColor="#FF0000" 
+            android:gravity="center" 
+            android:textSize="14sp" 
+            android:textStyle="bold"/>
+            
+        <TextView 
+            android:id="@+id/tv_hook_status" 
+            android:layout_width="0dp" 
+            android:layout_height="wrap_content" 
+            android:layout_weight="1" 
+            android:text="服务Hook" 
+            android:textColor="#FF0000" 
+            android:gravity="center" 
+            android:textSize="14sp" 
+            android:textStyle="bold"/>
+            
+        <TextView 
+            android:id="@+id/tv_ipc_status" 
+            android:layout_width="0dp" 
+            android:layout_height="wrap_content" 
+            android:layout_weight="1" 
+            android:text="IPC链路" 
+            android:textColor="#FF0000" 
+            android:gravity="center" 
+            android:textSize="14sp" 
+            android:textStyle="bold"/>
     </LinearLayout>
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical">
