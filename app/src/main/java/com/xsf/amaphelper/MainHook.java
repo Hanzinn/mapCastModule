@@ -29,7 +29,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String FIELD_INSTANCE = "b";
     
     // 核心策略：首选 AdaptAPI 类
-    private static final String CLASS_NAVI_INFO = "com.ecarx.xui.adaptapi.diminteraction.NaviInfo";
+    // private static final String CLASS_NAVI_INFO = "com.ecarx.xui.adaptapi.diminteraction.NaviInfo";
+    private static final String CLASS_NAVI_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
+
     private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel";
 
     // 🔧 强测试数据
