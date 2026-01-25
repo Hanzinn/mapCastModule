@@ -26,15 +26,14 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
     private static final String FIELD_INSTANCE = "b";
-    private static final String FIELD_INTERACTION = "d"; // 硬件接口字段名
+    private static final String FIELD_INTERACTION = "d"; 
     
     // 内部实体类
     private static final String CLASS_MAP_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
     private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel";
 
     private static String curRoadName = "系统就绪";
-    private static String nextRoadName = "V93.1测试";
-    // 强制默认值为 4 (右转)
+    private static String nextRoadName = "V94测试";
     private static int turnIcon = 4; 
     private static int segmentDis = 500;
     private static int routeRemainDis = 2000;
@@ -44,7 +43,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static int currentStatus = 1; 
 
     private static Object dashboardManagerInstance = null;
-    private static Object naviInteractionInstance = null; // 硬件接口
+    private static Object naviInteractionInstance = null; 
     private static Class<?> mapGuideInfoClass = null; 
     
     private static boolean isHookReady = false;
@@ -59,7 +58,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V93.1 混合完美版启动");
+        XposedBridge.log("NaviHook: 🚀 V94 容错修正版启动");
         
         initLBSHook(lpparam);
         hookNaviBaseModel(lpparam.classLoader);
@@ -163,7 +162,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             updateClusterDirectly();
                         }
                         else if ("XSF_ACTION_SEND_STATUS".equals(action)) {
-                            // 心跳包，修复指示灯不亮
                             sendAppLog("STATUS_SERVICE_RUNNING");
                             if (isHookReady) sendAppLog("STATUS_IPC_CONNECTED");
                         }
@@ -181,37 +179,54 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
+    // 🔥 V94 核心修正：容错唤醒机制
+    // 即使某个方法不存在，也不会打断后续流程！
     private void ensureActiveState() {
         if (naviInteractionInstance == null) return;
+        
+        // 步骤 1: 尝试 TBT 开启 (这是最关键的开门动作！)
+        try {
+            XposedHelpers.callMethod(naviInteractionInstance, "notifyTurnByTurnStarted");
+            XposedBridge.log("NaviHook: notifyTurnByTurnStarted 成功");
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: TBT 开启失败(忽略): " + t);
+        }
+
+        // 步骤 2: 尝试 setMapType (如果不存在就跳过，不崩)
         try {
             XposedHelpers.callMethod(naviInteractionInstance, "setMapType", currentVendor);
-            XposedHelpers.callMethod(naviInteractionInstance, "notifyTurnByTurnStarted");
-            try {
-                XposedHelpers.callMethod(naviInteractionInstance, "notifyStartNavigation");
-            } catch (Throwable t) {}
-            
-            sendAppLog("⚡ 已发送唤醒信号");
+            XposedBridge.log("NaviHook: setMapType 成功");
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: 唤醒失败 " + t);
+            XposedBridge.log("NaviHook: setMapType 缺失(忽略)");
         }
+        
+        // 步骤 3: 尝试 notifyStartNavigation
+        try {
+            XposedHelpers.callMethod(naviInteractionInstance, "notifyStartNavigation");
+        } catch (Throwable t) {}
+        
+        // 步骤 4: 尝试 updateNaviStatus (这是另一种切 Vendor 的方式)
+        try {
+             // 0x10 = GUIDE_START
+             XposedHelpers.callMethod(naviInteractionInstance, "updateNaviStatus", currentVendor, 16);
+        } catch (Throwable t) {}
+
+        sendAppLog("⚡ 唤醒指令已发送");
     }
 
-    // 修复了这里的 Typo
     private void updateClusterDirectly() {
         if (dashboardManagerInstance == null || mapGuideInfoClass == null) return;
         
         try {
-            // 1. 确保唤醒
-            ensureActiveState();
-
-            // 2. 构造内部对象
+            // 每次注入前都尝试唤醒一下（确保不休眠）
+            // 但为了性能，这里我们不再全套调用，只在 ensureActiveState 里做全套
+            
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
 
-            // 3. 强制非零数据
             int finalIcon = (turnIcon == 0) ? 4 : turnIcon; 
             int finalDis = (segmentDis == 0) ? 500 : segmentDis;
 
-            // 4. 精确填充
+            // 字段填充
             XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
             
@@ -219,13 +234,12 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", finalDis);
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
-            
             XposedHelpers.setIntField(guideInfo, "guideType", 0); // 0=GPS
             
-            // 5. 注入给管理器
+            // 注入给管理器
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
 
-            sendAppLog("💉 V93.1: [V" + currentVendor + "][Icon:" + finalIcon + "] Success!");
+            sendAppLog("💉 V94: [V" + currentVendor + "][Icon:" + finalIcon + "] OK");
 
         } catch (Throwable t) {
             sendAppLog("❌ 注入异常: " + t.getMessage());
@@ -261,6 +275,7 @@ public class MainHook implements IXposedHookLoadPackage {
         return (v == -1) ? 0 : v;
     }
 
+    // 🟢 修复灯光：双重广播发送
     private void sendAppLog(String log) {
         if (systemContext != null) {
             try {
@@ -268,10 +283,13 @@ public class MainHook implements IXposedHookLoadPackage {
                 i.setPackage(PKG_SELF);
                 i.putExtra("log", log);
                 i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                
+                // 1. 尝试 Root/System 级广播
                 try {
                     UserHandle allUser = (UserHandle) XposedHelpers.getStaticObjectField(UserHandle.class, "ALL");
                     XposedHelpers.callMethod(systemContext, "sendBroadcastAsUser", i, allUser);
                 } catch (Throwable t) {
+                    // 2. 如果失败，尝试降级为普通广播 (有些系统改了API)
                     systemContext.sendBroadcast(i);
                 }
             } catch (Throwable t) {}
