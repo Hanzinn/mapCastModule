@@ -13,83 +13,36 @@
         android:padding="10dp"
         android:layout_marginBottom="8dp">
         
-        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务Hook" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="运行" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
-        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="链路" android:textColor="#FF0000" android:gravity="center" android:textSize="15sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_lsp_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="LSP" android:textColor="#FF0000" android:gravity="center" android:textSize="14sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_hook_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="服务Hook" android:textColor="#FF0000" android:gravity="center" android:textSize="14sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_service_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="运行" android:textColor="#FF0000" android:gravity="center" android:textSize="14sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_ipc_status" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="0" android:visibility="gone"/>
     </LinearLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="horizontal"
-        android:baselineAligned="false">
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="0.5"
-            android:orientation="vertical"
-            android:paddingEnd="8dp">
-
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="V84 核心控制" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
-            
-            <Button 
-                android:id="@+id/btn_activate_test" 
-                android:layout_width="match_parent" 
-                android:layout_height="50dp" 
-                android:text="激活测试" 
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:backgroundTint="#D81B60" 
-                android:layout_marginBottom="12dp"/>
-
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Vendor (厂商协议)" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
-            
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginBottom="4dp">
-                <Button android:id="@+id/btn_vendor_0" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="锁 V0" android:textSize="13sp" android:backgroundTint="#673AB7" android:layout_marginEnd="2dp"/>
-                <Button android:id="@+id/btn_vendor_4" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="锁 V4" android:textSize="13sp" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
-            </LinearLayout>
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginBottom="12dp">
-                <Button android:id="@+id/btn_vendor_5" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="锁 V5" android:textSize="13sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
-                <Button android:id="@+id/btn_vendor_10" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="锁 V10" android:textSize="13sp" android:backgroundTint="#555555" android:layout_marginStart="2dp"/>
-            </LinearLayout>
-
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Extra State (状态位)" android:textColor="#888888" android:textSize="12sp" android:gravity="center_horizontal" android:layout_marginBottom="4dp"/>
-            
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-                <Button android:id="@+id/btn_status_1" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="状态 1" android:textSize="13sp" android:backgroundTint="#4CAF50" android:layout_marginEnd="2dp"/>
-                <Button android:id="@+id/btn_status_16" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="状态 16" android:textSize="13sp" android:backgroundTint="#FF9800" android:layout_marginStart="2dp"/>
-            </LinearLayout>
-
-            <android.widget.Space android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
-            
-            <Button 
-                android:id="@+id/btn_save_log" 
-                android:layout_width="match_parent" 
-                android:layout_height="45dp" 
-                android:text="保存日志" 
-                android:textSize="15sp"
-                android:backgroundTint="#444444"/>
-
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical">
+        
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="5dp">
+            <Button android:id="@+id/btn_v0" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V0" android:textSize="12sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
+            <Button android:id="@+id/btn_v4" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V4" android:textSize="12sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
+            <Button android:id="@+id/btn_v5" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V5" android:textSize="12sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
+            <Button android:id="@+id/btn_v10" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V10" android:textSize="12sp" android:backgroundTint="#555555"/>
         </LinearLayout>
+
+        <Button 
+            android:id="@+id/btn_force_connect" 
+            android:layout_width="match_parent" 
+            android:layout_height="50dp" 
+            android:text="强制连接 (自动握手)" 
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:backgroundTint="#009688"
+            android:layout_marginBottom="8dp"/>
 
         <ScrollView
             android:id="@+id/scrollView"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="0.5"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:background="#111111"
             android:fillViewport="true">
             <TextView 
@@ -101,8 +54,33 @@
                 android:textSize="13sp" 
                 android:lineSpacingExtra="3dp"
                 android:fontFamily="monospace" 
-                android:text="--- 系统就绪 ---\n"/>
+                android:text="等待日志..." />
         </ScrollView>
+        
+        <LinearLayout 
+            android:layout_width="match_parent" 
+            android:layout_height="wrap_content" 
+            android:orientation="horizontal" 
+            android:layout_marginTop="5dp">
+            
+            <Button 
+                android:id="@+id/btn_save_log" 
+                android:layout_width="0dp" 
+                android:layout_height="50dp" 
+                android:layout_weight="1"
+                android:text="保存日志" 
+                android:backgroundTint="#444444"
+                android:layout_marginEnd="5dp"/>
+                
+            <Button 
+                android:id="@+id/btn_close" 
+                android:layout_width="0dp" 
+                android:layout_height="50dp" 
+                android:layout_weight="1"
+                android:text="关闭APP" 
+                android:textColor="#FFFFFF"
+                android:backgroundTint="#B71C1C"/>
+        </LinearLayout>
+        
     </LinearLayout>
 </LinearLayout>
-
