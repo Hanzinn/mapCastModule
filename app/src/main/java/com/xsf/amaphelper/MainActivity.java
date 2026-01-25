@@ -19,12 +19,13 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     
-    private TextView tvLog, tvLsp, tvHook, tvSvc, tvIpc;
+    // 🟢 3个指示灯变量
+    private TextView tvLog, tvLsp, tvHook, tvIpc;
+    
     private Button btnV0, btnV4, btnV5, btnV10, btnForceConnect, btnClose, btnSaveLog;
     private ScrollView scrollView;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
 
-    // 模块自检方法，被Hook后返回true
     public boolean isModuleActive() { return false; }
 
     private BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -33,17 +34,25 @@ public class MainActivity extends Activity {
             String log = intent.getStringExtra("log");
             if (log == null) return;
             
-            // 🟢 状态监控：自动解析日志点亮指示灯
-            if (log.contains("STATUS_IPC_CONNECTED")) setStatus(tvHook, "服务Hook: ✅");
-            else if (log.contains("STATUS_SERVICE_RUNNING")) setStatus(tvSvc, "运行: ✅");
+            // 🟢 精简后的点灯逻辑
+            // 1. 只要服务跑起来了，就说明Hook成功了 -> 点亮中间的灯
+            if (log.contains("STATUS_SERVICE_RUNNING")) {
+                setStatus(tvHook, "服务Hook: ✅");
+            }
+            // 2. 只要抓到对象了，说明链路通了 -> 点亮右边的灯
+            else if (log.contains("STATUS_IPC_CONNECTED")) {
+                setStatus(tvIpc, "IPC链路: ✅");
+            }
             
             appendLog(log);
         }
     };
 
     private void setStatus(TextView tv, String text) {
-        tv.setText(text);
-        tv.setTextColor(Color.GREEN);
+        if (tv != null) {
+            tv.setText(text);
+            tv.setTextColor(Color.GREEN);
+        }
     }
 
     @Override
@@ -56,8 +65,7 @@ public class MainActivity extends Activity {
         
         tvLsp = findViewById(R.id.tv_lsp_status);
         tvHook = findViewById(R.id.tv_hook_status);
-        tvSvc = findViewById(R.id.tv_service_status);
-        tvIpc = findViewById(R.id.tv_ipc_status); // 虽然布局里没用到，但保留引用防止崩溃
+        tvIpc = findViewById(R.id.tv_ipc_status); // 删除了 tvSvc
 
         btnV0 = findViewById(R.id.btn_v0);
         btnV4 = findViewById(R.id.btn_v4);
@@ -66,7 +74,6 @@ public class MainActivity extends Activity {
         
         btnForceConnect = findViewById(R.id.btn_force_connect);
         btnSaveLog = findViewById(R.id.btn_save_log);
-        // 🔴 新增关闭按钮
         btnClose = findViewById(R.id.btn_close);
 
         btnV0.setOnClickListener(v -> sendVendor(0));
@@ -81,11 +88,9 @@ public class MainActivity extends Activity {
 
         btnSaveLog.setOnClickListener(v -> saveLogToFile());
         
-        // 🔴 关闭按钮逻辑：停止投屏并退出
         btnClose.setOnClickListener(v -> {
             appendLog(">>> 正在停止投屏并退出...");
             sendBroadcast(new Intent("XSF_ACTION_STOP"));
-            // 延迟一点退出，确保广播发出
             new android.os.Handler().postDelayed(() -> {
                 finish();
                 System.exit(0);
@@ -95,7 +100,6 @@ public class MainActivity extends Activity {
         IntentFilter filter = new IntentFilter("com.xsf.amaphelper.LOG_UPDATE");
         registerReceiver(receiver, filter);
         
-        // 启动时查询状态
         sendBroadcast(new Intent("XSF_ACTION_SEND_STATUS"));
     }
 
