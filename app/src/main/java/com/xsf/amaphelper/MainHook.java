@@ -27,7 +27,10 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
-    // 🟢 目标源头类：MapConfigurationWrapper (推测类名)
+    // 🟢 补回缺失的字段定义：单例对象字段名为 "b"
+    private static final String FIELD_INSTANCE = "b";
+    
+    // 目标源头类：MapConfigurationWrapper
     private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
 
     private static final String CLASS_MAP_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
@@ -59,13 +62,12 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V112动态版";
+    private static String nextRoadName = "V112修复版";
     private static int turnIcon = 4; 
     private static int segmentDis = 500;
     private static int routeRemainDis = 2000;
     private static int routeRemainTime = 600;
     
-    // 默认欺骗 Vendor ID
     private static int currentVendor = 5; 
     
     private static Object dashboardManagerInstance = null;
@@ -78,7 +80,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Context systemContext = null;
     private static Handler mainHandler = null;
     
-    // 防止重复Hook具体的Config类
     private static Set<String> hookedConfigClasses = new HashSet<>();
 
     @Override
@@ -90,27 +91,24 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V112 动态抓捕越狱版启动");
+        XposedBridge.log("NaviHook: 🚀 V112-Fix 动态抓捕越狱版启动");
         
         initLBSHook(lpparam);
         
-        // 🟢 1. 启动动态抓捕陷阱
+        // 启动动态抓捕
         setupDynamicJailbreak(lpparam.classLoader);
         
         hookNaviBaseModel(lpparam.classLoader);
     }
 
-    // 🔥 动态越狱核心逻辑
     private void setupDynamicJailbreak(ClassLoader cl) {
         try {
-            // 我们 Hook 抽象类 co 的上游：ce 类
-            // ce.a() 方法返回的就是具体的 co 实现类实例！
             Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
             if (wrapperClass != null) {
                 XposedHelpers.findAndHookMethod(wrapperClass, "a", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        Object concreteConfig = param.getResult(); // 获取真实的配置对象
+                        Object concreteConfig = param.getResult(); 
                         if (concreteConfig != null) {
                             hookConcreteConfigClass(concreteConfig.getClass());
                         }
@@ -125,10 +123,9 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 🔨 对捕获到的真实类进行越狱
     private void hookConcreteConfigClass(Class<?> realClass) {
         String className = realClass.getName();
-        if (hookedConfigClasses.contains(className)) return; // 避免重复Hook
+        if (hookedConfigClasses.contains(className)) return; 
 
         XposedBridge.log("NaviHook: 🎯 捕获到真实配置类: " + className);
         
@@ -137,7 +134,6 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(realClass, "b", new XC_MethodReplacement() {
                 @Override
                 protected Object replaceHookedMethod(MethodHookParam param) {
-                    // XposedBridge.log("NaviHook: 👻 拦截 b() -> 返回 " + currentVendor);
                     return currentVendor; 
                 }
             });
@@ -197,6 +193,16 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void captureCoreObjects(ClassLoader cl) {
         try {
+            // 尝试触发一次抓捕（以防 ce.a 已经被调用过）
+            try {
+                Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
+                if (wrapperClass != null) {
+                    // 主动调用一次 a() 获取当前实例并Hook
+                    Object config = XposedHelpers.callStaticMethod(wrapperClass, "a");
+                    if (config != null) hookConcreteConfigClass(config.getClass());
+                }
+            } catch (Throwable t) {}
+
             mapGuideInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_GUIDE_INFO, cl);
             mapStatusInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_STATUS_INFO, cl);
             mapSwitchInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_SWITCH_INFO, cl);
