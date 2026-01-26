@@ -11,6 +11,8 @@ import android.os.Looper;
 import android.os.UserHandle;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
@@ -25,8 +27,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
 
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
-    private static final String FIELD_INSTANCE = "b";
-    private static final String CLASS_MAP_CONFIG = "ecarx.naviservice.map.co"; // 校验锁
+    // 🟢 目标源头类：MapConfigurationWrapper (推测类名)
+    private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
 
     private static final String CLASS_MAP_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
     private static final String CLASS_MAP_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
@@ -45,13 +47,11 @@ public class MainHook implements IXposedHookLoadPackage {
         static final int APP_FINISH = 9;
     }
     
-    // 模式常量
     private static class NavMode {
         static final int CRUISE = 0; 
         static final int GUIDE = 1;  
     }
 
-    // 切换动作
     private static class SwitchState {
         static final int GUIDE_TO_GUIDE = 1;
         static final int GUIDE_TO_CRUISE = 2; 
@@ -59,12 +59,13 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V111安全版";
+    private static String nextRoadName = "V112动态版";
     private static int turnIcon = 4; 
     private static int segmentDis = 500;
     private static int routeRemainDis = 2000;
     private static int routeRemainTime = 600;
     
+    // 默认欺骗 Vendor ID
     private static int currentVendor = 5; 
     
     private static Object dashboardManagerInstance = null;
@@ -76,6 +77,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private static boolean isHandshaking = false;
     private static Context systemContext = null;
     private static Handler mainHandler = null;
+    
+    // 防止重复Hook具体的Config类
+    private static Set<String> hookedConfigClasses = new HashSet<>();
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -86,15 +90,73 @@ public class MainHook implements IXposedHookLoadPackage {
 
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V111 安全越狱版启动");
+        XposedBridge.log("NaviHook: 🚀 V112 动态抓捕越狱版启动");
         
-        // 🟢 修正点：先注册核心Hook，防止越狱代码崩溃导致整个模块失效
         initLBSHook(lpparam);
         
-        // 尝试Hook Base Model (如果类已加载)
+        // 🟢 1. 启动动态抓捕陷阱
+        setupDynamicJailbreak(lpparam.classLoader);
+        
+        hookNaviBaseModel(lpparam.classLoader);
+    }
+
+    // 🔥 动态越狱核心逻辑
+    private void setupDynamicJailbreak(ClassLoader cl) {
         try {
-            hookNaviBaseModel(lpparam.classLoader);
-        } catch (Throwable t) {}
+            // 我们 Hook 抽象类 co 的上游：ce 类
+            // ce.a() 方法返回的就是具体的 co 实现类实例！
+            Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
+            if (wrapperClass != null) {
+                XposedHelpers.findAndHookMethod(wrapperClass, "a", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        Object concreteConfig = param.getResult(); // 获取真实的配置对象
+                        if (concreteConfig != null) {
+                            hookConcreteConfigClass(concreteConfig.getClass());
+                        }
+                    }
+                });
+                XposedBridge.log("NaviHook: 🪤 已设置 ce.a() 抓捕陷阱");
+            } else {
+                XposedBridge.log("NaviHook: ❌ 找不到包装类 " + CLASS_MAP_CONFIG_WRAPPER);
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: ❌ 设置抓捕失败: " + t);
+        }
+    }
+
+    // 🔨 对捕获到的真实类进行越狱
+    private void hookConcreteConfigClass(Class<?> realClass) {
+        String className = realClass.getName();
+        if (hookedConfigClasses.contains(className)) return; // 避免重复Hook
+
+        XposedBridge.log("NaviHook: 🎯 捕获到真实配置类: " + className);
+        
+        try {
+            // Hook b() -> 欺骗 Vendor
+            XposedHelpers.findAndHookMethod(realClass, "b", new XC_MethodReplacement() {
+                @Override
+                protected Object replaceHookedMethod(MethodHookParam param) {
+                    // XposedBridge.log("NaviHook: 👻 拦截 b() -> 返回 " + currentVendor);
+                    return currentVendor; 
+                }
+            });
+
+            // Hook g() -> 欺骗 isValid
+            XposedHelpers.findAndHookMethod(realClass, "g", new XC_MethodReplacement() {
+                @Override
+                protected Object replaceHookedMethod(MethodHookParam param) {
+                    return true; 
+                }
+            });
+
+            hookedConfigClasses.add(className);
+            XposedBridge.log("NaviHook: 🔓 越狱成功！类 " + className + " 已被攻破");
+            sendJavaBroadcast("🔓 越狱成功: " + className);
+
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: ❌ Hook真实类失败: " + t);
+        }
     }
 
     private void initLBSHook(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -107,7 +169,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     mainHandler = new Handler(Looper.getMainLooper());
                     registerReceiver(context);
                     
-                    // 🟢 这一步必须执行，指示灯才会亮
                     sendJavaBroadcast("STATUS_SERVICE_RUNNING");
                     
                     mainHandler.postDelayed(() -> {
@@ -117,35 +178,6 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable t) {
             XposedBridge.log("NaviHook: onCreate Hook 失败: " + t);
-        }
-    }
-
-    // 🔥 安全越狱：在 captureCoreObjects 内部执行，确保类加载器就绪
-    private void bypassSystemVendorCheck(ClassLoader cl) {
-        try {
-            Class<?> configClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG, cl);
-            if (configClass != null) {
-                // Hook b() -> 强制返回 5
-                XposedHelpers.findAndHookMethod(configClass, "b", new XC_MethodReplacement() {
-                    @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) {
-                        return currentVendor; 
-                    }
-                });
-                // Hook g() -> 强制返回 true
-                XposedHelpers.findAndHookMethod(configClass, "g", new XC_MethodReplacement() {
-                    @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) {
-                        return true; 
-                    }
-                });
-                XposedBridge.log("NaviHook: 🔓 越狱补丁植入成功");
-                sendJavaBroadcast("🔓 越狱成功: 强制 V" + currentVendor);
-            } else {
-                XposedBridge.log("NaviHook: ❌ 找不到配置类 co");
-            }
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: ❌ 越狱尝试失败: " + t);
         }
     }
 
@@ -165,10 +197,6 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void captureCoreObjects(ClassLoader cl) {
         try {
-            // 🟢 1. 先尝试越狱 (即使失败也不影响后续)
-            bypassSystemVendorCheck(cl);
-            
-            // 2. 加载核心类
             mapGuideInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_GUIDE_INFO, cl);
             mapStatusInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_STATUS_INFO, cl);
             mapSwitchInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_SWITCH_INFO, cl);
@@ -185,7 +213,7 @@ public class MainHook implements IXposedHookLoadPackage {
             
             if (dashboardManagerInstance != null) {
                 XposedBridge.log("NaviHook: 🎉 捕获成功!");
-                sendJavaBroadcast("STATUS_IPC_CONNECTED"); // 这里的灯必须亮
+                sendJavaBroadcast("STATUS_IPC_CONNECTED");
                 
                 performLifecycleHandshake();
             }
@@ -256,8 +284,6 @@ public class MainHook implements IXposedHookLoadPackage {
         mainHandler.post(() -> {
             try {
                 // 1. 模式唤醒 (CRUISE -> GUIDE)
-                // 这里的参数 (old=0, new=1) 是 Mode，不是 Vendor！
-                // 同时，因为我们Hook了co.b()返回5，所以外部调用的Vendor校验也会通过。
                 injectModeSwitch(NavMode.CRUISE, NavMode.GUIDE, SwitchState.CRUISE_TO_GUIDE);
                 sendJavaBroadcast("⚡ [0/7] 模式唤醒: 巡航->导航");
 
@@ -386,7 +412,7 @@ public class MainHook implements IXposedHookLoadPackage {
             
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
 
-            sendJavaBroadcast("💉 V111: [V" + currentVendor + "][Icon:" + finalIcon + "]");
+            sendJavaBroadcast("💉 V112: [V" + currentVendor + "][Icon:" + finalIcon + "]");
 
         } catch (Throwable t) {
             sendJavaBroadcast("❌ 注入异常: " + t.getMessage());
