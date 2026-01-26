@@ -31,7 +31,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
     private static final String FIELD_INSTANCE = "b";
     
-    // 目标类
     private static final String CLASS_MAP_CONFIG_BASE = "ecarx.naviservice.map.co"; 
     private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
 
@@ -40,7 +39,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLASS_MAP_SWITCH_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
     private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel";
 
-    // 状态常量
     private static class Status {
         static final int APP_START = 7;
         static final int APP_START_FINISH = 8;
@@ -58,12 +56,14 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V119变频版";
-    private static int turnIcon = 2; 
+    private static String nextRoadName = "V120满血版";
+    private static int turnIcon = 2; // 左转
     private static int segmentDis = 888;
+    private static int routeRemainDis = 2000;
+    private static int routeRemainTime = 600;
     
-    // 🟢 锁定目标 Vendor 5 (ECARX)
-    private static int targetVendor = 5; 
+    // 🔒 锁定 Vendor 5
+    private static int currentVendor = 5; 
     
     private static Object dashboardManagerInstance = null;
     private static Class<?> mapGuideInfoClass = null; 
@@ -85,7 +85,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V119 变频激活版启动");
+        XposedBridge.log("NaviHook: 🚀 V120 满血复活版启动");
         
         initLBSHook(lpparam);
         hookAbstractBaseClass(lpparam.classLoader);
@@ -93,7 +93,7 @@ public class MainHook implements IXposedHookLoadPackage {
         hookNaviBaseModel(lpparam.classLoader);
     }
 
-    // ... 越狱 Hook 代码 (保持 V117 不变) ...
+    // ... Hook 逻辑保持不变 (V119 已验证成功) ...
     private void hookAbstractBaseClass(ClassLoader cl) {
         try {
             Class<?> baseClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_BASE, cl);
@@ -128,7 +128,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(realClass, "b", new XC_MethodReplacement() {
                 @Override
                 protected Object replaceHookedMethod(MethodHookParam param) {
-                    return targetVendor; // 强制返回 5
+                    return currentVendor; // 动态返回 5 (或其他设定值)
                 }
             });
             hookedConfigClasses.add(className);
@@ -137,7 +137,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // ... initLBSHook, hookNaviBaseModel, captureCoreObjects (保持不变) ...
     private void initLBSHook(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -161,7 +160,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) {
-                        return targetVendor; 
+                        return currentVendor; 
                     }
                 });
             }
@@ -189,6 +188,7 @@ public class MainHook implements IXposedHookLoadPackage {
             
             if (dashboardManagerInstance != null) {
                 XposedBridge.log("NaviHook: 🎉 捕获成功!");
+                sendJavaBroadcast("STATUS_SERVICE_RUNNING"); // 补发
                 sendJavaBroadcast("STATUS_IPC_CONNECTED");
                 performLifecycleHandshake();
             }
@@ -205,11 +205,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                         String action = intent.getAction();
                         if (AMAP_ACTION.equals(action)) {
-                            // 忽略真实数据
+                            // 暂时忽略真实数据，确保心跳包独占
                         }
                         else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                             targetVendor = intent.getIntExtra("vendor", 5);
-                             sendJavaBroadcast("🔄 目标切换 -> V" + targetVendor);
+                             currentVendor = intent.getIntExtra("vendor", 5);
+                             sendJavaBroadcast("🔄 切换 -> V" + currentVendor);
                              performLifecycleHandshake(); 
                         }
                         else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
@@ -222,7 +222,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     } catch (Throwable t) {}
                 }
             };
-            
             IntentFilter filter = new IntentFilter();
             filter.addAction(AMAP_ACTION);
             filter.addAction("XSF_ACTION_SET_VENDOR");
@@ -245,35 +244,59 @@ public class MainHook implements IXposedHookLoadPackage {
         runHandshakeSequence();
     }
 
+    // 🔥 V120 核心：恢复完整的 7 步握手流程
     private void runHandshakeSequence() {
         final int STEP_DELAY = 200;
         final int MODE_SWITCH_DELAY = 500;
 
         mainHandler.post(() -> {
             try {
-                // 🟢 核心修正：制造差异 (The Difference)
-                // 旧Vendor: -1 (不存在的Vendor)
-                // 新Vendor: 5 (或者当前选择的)
-                // 结果：-1 != 5 -> 触发切换！
-                injectSwitch(-1, targetVendor, SwitchState.CRUISE_TO_GUIDE);
-                sendJavaBroadcast("⚡ [0/7] 强制切换: -1 -> V" + targetVendor);
+                // 1. 制造差异切换 (Force Switch)
+                // -1 -> 5 (currentVendor)
+                // 这会强制触发 cl.smali 中的 update 逻辑
+                injectSwitch(-1, currentVendor, SwitchState.CRUISE_TO_GUIDE);
+                sendJavaBroadcast("⚡ [0/7] 强制切换: -1 -> V" + currentVendor);
 
                 mainHandler.postDelayed(() -> {
-                    // 1. APP_START
+                    // 2. APP_START
                     injectStatus(Status.APP_START);
                     sendJavaBroadcast("⚡ [1/7] APP启动(7)");
 
                     mainHandler.postDelayed(() -> {
-                        // ... 中间状态省略，直接跳到关键步骤 ...
-                        // 6. GUIDE_START
-                        injectStatus(Status.GUIDE_START);
-                        sendJavaBroadcast("⚡ [6/7] 导航开始(16) -> ✅");
-                        
-                        startHeartbeat();
-                        
-                        isHandshaking = false;
-                        isHookReady = true;
-                    }, 2000); // 简化延时，快速启动
+                        // 3. APP_START_FINISH
+                        injectStatus(Status.APP_START_FINISH);
+                        sendJavaBroadcast("⚡ [2/7] 启动完成(8)");
+
+                        mainHandler.postDelayed(() -> {
+                            // 4. APP_ACTIVE
+                            injectStatus(Status.APP_ACTIVE);
+                            sendJavaBroadcast("⚡ [3/7] APP活跃(12)");
+                            
+                            mainHandler.postDelayed(() -> {
+                                // 5. ROUTE_START (之前被删了，现在补回来！)
+                                injectStatus(Status.ROUTE_START);
+                                sendJavaBroadcast("⚡ [4/7] 路径计算(13)");
+                                
+                                mainHandler.postDelayed(() -> {
+                                    // 6. ROUTE_SUCCESS
+                                    injectStatus(Status.ROUTE_SUCCESS);
+                                    sendJavaBroadcast("⚡ [5/7] 计算成功(14)");
+                                    
+                                    mainHandler.postDelayed(() -> {
+                                        // 7. GUIDE_START
+                                        injectStatus(Status.GUIDE_START);
+                                        sendJavaBroadcast("⚡ [6/7] 导航开始(16) -> ✅");
+                                        
+                                        // 启动数据泵
+                                        startHeartbeat();
+                                        
+                                        isHandshaking = false;
+                                        isHookReady = true;
+                                    }, STEP_DELAY);
+                                }, STEP_DELAY);
+                            }, STEP_DELAY);
+                        }, STEP_DELAY);
+                    }, STEP_DELAY);
                 }, MODE_SWITCH_DELAY);
             } catch (Throwable t) {
                 isHandshaking = false;
@@ -306,7 +329,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 sendJavaBroadcast("🛑 导航已停止");
                 mainHandler.postDelayed(() -> {
                     // 退出时也制造差异：5 -> -1
-                    injectSwitch(targetVendor, -1, SwitchState.GUIDE_TO_CRUISE);
+                    injectSwitch(currentVendor, -1, SwitchState.GUIDE_TO_CRUISE);
                     sendJavaBroadcast("🛑 切回巡航");
                     mainHandler.postDelayed(() -> {
                         injectStatus(Status.APP_FINISH);
@@ -328,24 +351,27 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void updateClusterDirectly() {
         try {
-            Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, targetVendor);
+            Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
             XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
             XposedHelpers.setIntField(guideInfo, "turnId", turnIcon); 
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", segmentDis);
+            XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
+            XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
+            
             XposedHelpers.setIntField(guideInfo, "guideType", 1); 
             try { XposedHelpers.setIntField(guideInfo, "roadType", 1); } catch (Throwable t) {}
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
             
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V119: [V" + targetVendor + "][Dis:" + segmentDis + "]");
+            sendJavaBroadcast("💉 V120: [V" + currentVendor + "][Dis:" + segmentDis + "]");
         } catch (Throwable t) {}
     }
     
-    // ... clearClusterData, injectStatus, sendJavaBroadcast, extractData 保持不变 ...
+    // ... extractData, sendJavaBroadcast, clearClusterData, injectStatus 保持不变 ...
     private void clearClusterData() {
         try {
-            Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, targetVendor);
+            Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
             XposedHelpers.setObjectField(guideInfo, "curRoadName", "");
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", "");
             XposedHelpers.setIntField(guideInfo, "turnId", 0);
@@ -357,7 +383,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private void injectStatus(int status) {
         try {
-            Object statusInfo = XposedHelpers.newInstance(mapStatusInfoClass, targetVendor);
+            Object statusInfo = XposedHelpers.newInstance(mapStatusInfoClass, currentVendor);
             XposedHelpers.setIntField(statusInfo, "status", status);
             XposedHelpers.callMethod(dashboardManagerInstance, "a", statusInfo);
         } catch (Throwable t) {}
@@ -381,5 +407,24 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             } catch (Throwable t) {}
         }).start();
+    }
+    
+    private void extractData(Bundle b) {
+        try {
+            if (b.containsKey("CUR_ROAD_NAME")) curRoadName = b.getString("CUR_ROAD_NAME");
+            if (b.containsKey("NEXT_ROAD_NAME")) nextRoadName = b.getString("NEXT_ROAD_NAME");
+            segmentDis = getInt(b, "SEG_REMAIN_DIS", "seg_remain_dis");
+            turnIcon = getInt(b, "ICON", "icon");
+            if (turnIcon == 0 && b.containsKey("NAV_ICON")) turnIcon = b.getInt("NAV_ICON");
+            routeRemainDis = getInt(b, "ROUTE_REMAIN_DIS", "route_remain_dis");
+            routeRemainTime = getInt(b, "ROUTE_REMAIN_TIME", "route_remain_time");
+            if (curRoadName == null) curRoadName = "当前道路";
+        } catch (Exception e) {}
+    }
+    
+    private int getInt(Bundle b, String k1, String k2) {
+        int v = b.getInt(k1, -1);
+        if (v == -1) v = b.getInt(k2, -1);
+        return (v == -1) ? 0 : v;
     }
 }
