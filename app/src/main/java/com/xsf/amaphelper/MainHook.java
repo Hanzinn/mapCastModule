@@ -56,13 +56,11 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V120满血版";
-    private static int turnIcon = 2; // 左转
+    private static String nextRoadName = "V121乒乓版";
+    private static int turnIcon = 2; 
     private static int segmentDis = 888;
-    private static int routeRemainDis = 2000;
-    private static int routeRemainTime = 600;
     
-    // 🔒 锁定 Vendor 5
+    // 默认目标 V5
     private static int currentVendor = 5; 
     
     private static Object dashboardManagerInstance = null;
@@ -85,7 +83,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V120 满血复活版启动");
+        XposedBridge.log("NaviHook: 🚀 V121 乒乓切换版启动");
         
         initLBSHook(lpparam);
         hookAbstractBaseClass(lpparam.classLoader);
@@ -93,7 +91,6 @@ public class MainHook implements IXposedHookLoadPackage {
         hookNaviBaseModel(lpparam.classLoader);
     }
 
-    // ... Hook 逻辑保持不变 (V119 已验证成功) ...
     private void hookAbstractBaseClass(ClassLoader cl) {
         try {
             Class<?> baseClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_BASE, cl);
@@ -128,7 +125,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(realClass, "b", new XC_MethodReplacement() {
                 @Override
                 protected Object replaceHookedMethod(MethodHookParam param) {
-                    return currentVendor; // 动态返回 5 (或其他设定值)
+                    return currentVendor; // 返回当前选中的 Vendor
                 }
             });
             hookedConfigClasses.add(className);
@@ -188,7 +185,7 @@ public class MainHook implements IXposedHookLoadPackage {
             
             if (dashboardManagerInstance != null) {
                 XposedBridge.log("NaviHook: 🎉 捕获成功!");
-                sendJavaBroadcast("STATUS_SERVICE_RUNNING"); // 补发
+                sendJavaBroadcast("STATUS_SERVICE_RUNNING");
                 sendJavaBroadcast("STATUS_IPC_CONNECTED");
                 performLifecycleHandshake();
             }
@@ -204,10 +201,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 public void onReceive(Context ctx, Intent intent) {
                     try {
                         String action = intent.getAction();
-                        if (AMAP_ACTION.equals(action)) {
-                            // 暂时忽略真实数据，确保心跳包独占
-                        }
-                        else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
+                        if ("XSF_ACTION_SET_VENDOR".equals(action)) {
                              currentVendor = intent.getIntExtra("vendor", 5);
                              sendJavaBroadcast("🔄 切换 -> V" + currentVendor);
                              performLifecycleHandshake(); 
@@ -223,7 +217,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             };
             IntentFilter filter = new IntentFilter();
-            filter.addAction(AMAP_ACTION);
             filter.addAction("XSF_ACTION_SET_VENDOR");
             filter.addAction("XSF_ACTION_FORCE_CONNECT");
             filter.addAction("XSF_ACTION_STOP");
@@ -244,52 +237,46 @@ public class MainHook implements IXposedHookLoadPackage {
         runHandshakeSequence();
     }
 
-    // 🔥 V120 核心：恢复完整的 7 步握手流程
+    // 🔥 V121 核心：使用合法 ID 制造“差异切换”
     private void runHandshakeSequence() {
         final int STEP_DELAY = 200;
         final int MODE_SWITCH_DELAY = 500;
 
         mainHandler.post(() -> {
             try {
-                // 1. 制造差异切换 (Force Switch)
-                // -1 -> 5 (currentVendor)
-                // 这会强制触发 cl.smali 中的 update 逻辑
-                injectSwitch(-1, currentVendor, SwitchState.CRUISE_TO_GUIDE);
-                sendJavaBroadcast("⚡ [0/7] 强制切换: -1 -> V" + currentVendor);
+                // 🟢 智能差异化逻辑：
+                // 如果当前选了 V5，我们就假装从 V0 切过来 -> (0 != 5) 触发切换
+                // 如果当前选了 V0，我们就假装从 V5 切过来 -> (5 != 0) 触发切换
+                int fakeOldVendor = (currentVendor == 5) ? 0 : 5;
+                
+                injectSwitch(fakeOldVendor, currentVendor, SwitchState.CRUISE_TO_GUIDE);
+                sendJavaBroadcast("⚡ [0/7] 乒乓切换: V" + fakeOldVendor + " -> V" + currentVendor);
 
                 mainHandler.postDelayed(() -> {
-                    // 2. APP_START
                     injectStatus(Status.APP_START);
                     sendJavaBroadcast("⚡ [1/7] APP启动(7)");
 
                     mainHandler.postDelayed(() -> {
-                        // 3. APP_START_FINISH
                         injectStatus(Status.APP_START_FINISH);
                         sendJavaBroadcast("⚡ [2/7] 启动完成(8)");
 
                         mainHandler.postDelayed(() -> {
-                            // 4. APP_ACTIVE
                             injectStatus(Status.APP_ACTIVE);
                             sendJavaBroadcast("⚡ [3/7] APP活跃(12)");
                             
                             mainHandler.postDelayed(() -> {
-                                // 5. ROUTE_START (之前被删了，现在补回来！)
                                 injectStatus(Status.ROUTE_START);
                                 sendJavaBroadcast("⚡ [4/7] 路径计算(13)");
                                 
                                 mainHandler.postDelayed(() -> {
-                                    // 6. ROUTE_SUCCESS
                                     injectStatus(Status.ROUTE_SUCCESS);
                                     sendJavaBroadcast("⚡ [5/7] 计算成功(14)");
                                     
                                     mainHandler.postDelayed(() -> {
-                                        // 7. GUIDE_START
                                         injectStatus(Status.GUIDE_START);
                                         sendJavaBroadcast("⚡ [6/7] 导航开始(16) -> ✅");
                                         
-                                        // 启动数据泵
                                         startHeartbeat();
-                                        
                                         isHandshaking = false;
                                         isHookReady = true;
                                     }, STEP_DELAY);
@@ -328,8 +315,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 injectStatus(Status.GUIDE_STOP);
                 sendJavaBroadcast("🛑 导航已停止");
                 mainHandler.postDelayed(() -> {
-                    // 退出时也制造差异：5 -> -1
-                    injectSwitch(currentVendor, -1, SwitchState.GUIDE_TO_CRUISE);
+                    // 退出时也做差异切换：切回 V0 (或者 fakeOld)
+                    int fakeBackVendor = (currentVendor == 5) ? 0 : 5;
+                    injectSwitch(currentVendor, fakeBackVendor, SwitchState.GUIDE_TO_CRUISE);
                     sendJavaBroadcast("🛑 切回巡航");
                     mainHandler.postDelayed(() -> {
                         injectStatus(Status.APP_FINISH);
@@ -364,11 +352,11 @@ public class MainHook implements IXposedHookLoadPackage {
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
             
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V120: [V" + currentVendor + "][Dis:" + segmentDis + "]");
+            sendJavaBroadcast("💉 V121: [V" + currentVendor + "][Dis:" + segmentDis + "]");
         } catch (Throwable t) {}
     }
     
-    // ... extractData, sendJavaBroadcast, clearClusterData, injectStatus 保持不变 ...
+    // ... clearClusterData, injectStatus, sendJavaBroadcast, extractData 保持不变 ...
     private void clearClusterData() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
