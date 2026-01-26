@@ -56,9 +56,13 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V121乒乓版";
+    private static String nextRoadName = "V121修复版";
     private static int turnIcon = 2; 
     private static int segmentDis = 888;
+    
+    // 🟢 补回缺失的变量定义
+    private static int routeRemainDis = 2000;
+    private static int routeRemainTime = 600;
     
     // 默认目标 V5
     private static int currentVendor = 5; 
@@ -83,7 +87,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V121 乒乓切换版启动");
+        XposedBridge.log("NaviHook: 🚀 V121-Fix 编译修复版启动");
         
         initLBSHook(lpparam);
         hookAbstractBaseClass(lpparam.classLoader);
@@ -356,7 +360,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
     
-    // ... clearClusterData, injectStatus, sendJavaBroadcast, extractData 保持不变 ...
     private void clearClusterData() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
