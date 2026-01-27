@@ -1,12 +1,11 @@
 package com.xsf.amaphelper;
 
-import android.util.Log;
-import java.lang.reflect.Field;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import java.lang.reflect.Method;
 
 public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SERVICE = "ecarx.naviservice";
@@ -15,59 +14,45 @@ public class MainHook implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviSpy: 🚀 V124 全息透视版启动");
+        XposedBridge.log("NaviSpy: 🚀 V125 填空题抄写版启动");
 
-        // 🟢 重点监控 MapGuideInfo (Vendor=0 的那个对象)
+        // 🟢 监控 MapGuideInfo 的所有 set 方法
+        // 这样我们就能看到它到底填了哪些值！
         try {
-            XposedHelpers.findAndHookConstructor(
-                "ecarx.naviservice.map.entity.MapGuideInfo", 
-                lpparam.classLoader, 
-                int.class, 
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        int vendor = (int) param.args[0];
-                        Object guideInfo = param.thisObject;
-                        
-                        // 只看 Vendor=0 的（官方数据）
-                        if (vendor == 0) {
-                            XposedBridge.log("NaviSpy: 📦 [捕获] MapGuideInfo(V0)");
+            Class<?> guideInfoClass = XposedHelpers.findClass("ecarx.naviservice.map.entity.MapGuideInfo", lpparam.classLoader);
+            
+            for (Method method : guideInfoClass.getDeclaredMethods()) {
+                if (method.getName().startsWith("set")) {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            // 获取方法名（例如 setTurnIcon）
+                            String methodName = param.method.getName();
+                            // 获取参数值（例如 2）
+                            Object value = (param.args.length > 0) ? param.args[0] : "null";
                             
-                            // 1. 打印所有字段值 (抄作业的标准答案)
-                            String fields = dumpFields(guideInfo);
-                            XposedBridge.log("NaviSpy: 📝 字段详情 -> " + fields);
-                            
-                            // 2. 打印调用栈 (找到 VIP 密道入口)
-                            // 加上这个，我们就能知道是哪个类在发数据！
-                            XposedBridge.log("NaviSpy: 🔗 调用来源 -> \n" + Log.getStackTraceString(new Throwable()));
+                            XposedBridge.log("NaviSpy: ✍️ [填空] " + methodName + " = " + value);
                         }
-                    }
+                    });
                 }
-            );
-        } catch (Throwable t) {
-            XposedBridge.log("NaviSpy: ❌ 监控 GuideInfo 失败: " + t);
-        }
-    }
-
-    // 反射遍历所有字段
-    private String dumpFields(Object obj) {
-        StringBuilder sb = new StringBuilder();
-        try {
-            Class<?> clazz = obj.getClass();
-            // 遍历当前类及父类的字段
-            while (clazz != null) {
-                Field[] fields = clazz.getDeclaredFields();
-                for (Field f : fields) {
-                    f.setAccessible(true);
-                    String name = f.getName();
-                    Object value = f.get(obj);
-                    sb.append(name).append("=").append(value).append("; ");
-                }
-                clazz = clazz.getSuperclass(); // 继续查父类
             }
-        } catch (Exception e) {
-            sb.append("解析异常");
+        } catch (Throwable t) {
+            XposedBridge.log("NaviSpy: ❌ 监控 Set 方法失败: " + t);
         }
-        return sb.toString();
+        
+        // 🟢 同时监控 Switch (虽然可能抓不到，但为了保险)
+        try {
+            Class<?> switchClass = XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", lpparam.classLoader);
+             for (Method method : switchClass.getDeclaredMethods()) {
+                if (method.getName().startsWith("set") || method.getName().equals("toString")) { // toString可能会暴露内部状态
+                     XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                             XposedBridge.log("NaviSpy: 🚦 [Switch] " + param.method.getName() + " -> " + param.getResult());
+                        }
+                    });
+                }
+            }
+        } catch (Throwable t) {}
     }
 }
