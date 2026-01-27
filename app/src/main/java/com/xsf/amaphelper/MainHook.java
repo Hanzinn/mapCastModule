@@ -1,22 +1,21 @@
 package com.xsf.amaphelper;
 
 import android.app.Application;
-import android.app.Presentation; // 🟢 必须引入
+import android.app.Presentation;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.graphics.Color; // 🟢 必须引入
-import android.hardware.display.DisplayManager; // 🟢 必须引入
+import android.graphics.Color;
+import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserHandle;
-import android.view.Display; // 🟢 必须引入
-import android.view.Gravity; // 🟢 必须引入
-import android.view.WindowManager; // 🟢 必须引入
-import android.widget.TextView; // 🟢 必须引入
-import java.lang.reflect.Field;
+import android.view.Display;
+import android.view.Gravity;
+import android.view.WindowManager;
+import android.widget.TextView;
 import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Set;
@@ -61,11 +60,11 @@ public class MainHook implements IXposedHookLoadPackage {
         static final int GUIDE_TO_CRUISE = 2; 
     }
 
-    private static String curRoadName = "视频通道测试";
-    private static String nextRoadName = "V129";
+    private static String curRoadName = "等待数据";
+    private static String nextRoadName = "V130地图模式";
     private static int turnIcon = 2; 
     private static int segmentDis = 888;
-    private static int routeRemainDis = 2500;
+    private static int routeRemainDis = 2000;
     private static int routeRemainTime = 600;
     
     private static int currentVendor = 0; 
@@ -83,8 +82,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Timer heartbeatTimer = null;
     private static Set<String> hookedConfigClasses = new HashSet<>();
 
-    // 🆕 全局变量：保存副屏窗口对象
     private static Presentation clusterPresentation = null;
+    private static Timer flashTimer = null; // 🚨 爆闪定时器
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -94,42 +93,33 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V129 视频通道激活版启动");
+        XposedBridge.log("NaviHook: 🚀 V130 地图模式矫正版启动");
         
         initLBSHook(lpparam);
         setupDynamicJailbreak(lpparam.classLoader);
         hookNaviBaseModel(lpparam.classLoader);
     }
 
-    // 🟢 核心新功能：寻找并点亮副屏
     private void initClusterDisplay(Context context) {
         try {
             DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
             Display[] displays = dm.getDisplays();
             
             XposedBridge.log("NaviHook: 🖥️ 扫描屏幕... 总数: " + displays.length);
-            sendJavaBroadcast("🖥️ 屏幕数量: " + displays.length);
-
+            
             for (Display display : displays) {
                 int id = display.getDisplayId();
-                String name = display.getName();
-                XposedBridge.log("NaviHook: 🖥️ 发现屏幕 ID=" + id + " Name=" + name);
-                
-                // ID 0 通常是中控屏，我们需要找 ID 不为 0 的屏幕（仪表盘）
                 if (id != 0) { 
-                    XposedBridge.log("NaviHook: 🎯 锁定目标副屏 ID=" + id + "，准备投射...");
+                    XposedBridge.log("NaviHook: 🎯 锁定目标副屏 ID=" + id + " (" + display.getName() + ")");
                     showPresentation(context, display);
                     return; 
                 }
             }
-            sendJavaBroadcast("⚠️ 未找到副屏，无法投射画面");
         } catch (Throwable t) {
             XposedBridge.log("NaviHook: ❌ 副屏初始化失败: " + t);
-            sendJavaBroadcast("❌ 副屏异常: " + t.getMessage());
         }
     }
 
-    // 🟢 核心新功能：创建绿色背景+红字的测试画面
     private void showPresentation(Context context, Display display) {
         mainHandler.post(() -> {
             try {
@@ -137,33 +127,44 @@ public class MainHook implements IXposedHookLoadPackage {
                     clusterPresentation.dismiss();
                 }
                 
-                // 创建 Presentation (异显窗口)
+                // 🟢 修正：使用 TYPE_PRIVATE_PRESENTATION
+                // 并配合 TYPE_SYSTEM_ALERT 做兼容
                 clusterPresentation = new Presentation(context, display) {
                     @Override
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         
-                        // 构建一个显眼的界面：绿底红字
                         TextView tv = new TextView(getContext());
-                        tv.setText("V129 视频通道\n激活成功!");
-                        tv.setTextColor(Color.RED);
+                        tv.setText("V130 投屏测试\n地图模式(0)");
+                        tv.setTextColor(Color.WHITE);
                         tv.setTextSize(40);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.GREEN); // 亮绿色背景，确保一眼能看到
+                        tv.setBackgroundColor(Color.BLUE); // 初始蓝色
                         
                         setContentView(tv);
+                        
+                        // 🚨 启动爆闪效果 (红/绿交替)
+                        startFlashing(tv);
                     }
                 };
                 
-                // 设置窗口类型为系统覆盖层，保证权限足够
-                if (android.os.Build.VERSION.SDK_INT >= 26) {
-                    clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
-                } else {
+                try {
+                    clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_PRIVATE_PRESENTATION);
+                } catch (Exception e) {
                     clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
                 }
                 
+                // 关键 Flags：全屏、无焦点、保持常亮
+                clusterPresentation.getWindow().addFlags(
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN |
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                );
+                
                 clusterPresentation.show();
-                XposedBridge.log("NaviHook: ✅ 副屏画面已投射 (Green Screen)");
+                XposedBridge.log("NaviHook: ✅ 副屏画面已投射 (Flashing Mode)");
                 sendJavaBroadcast("✅ 视频通道已打通!");
                 
             } catch (Throwable t) {
@@ -173,8 +174,26 @@ public class MainHook implements IXposedHookLoadPackage {
         });
     }
 
-    // ... 下面是 V128 的完整逻辑，完全保留 ...
+    // 🚨 爆闪逻辑：让屏幕动起来，防止被当做静态图片过滤
+    private void startFlashing(TextView tv) {
+        if (flashTimer != null) flashTimer.cancel();
+        flashTimer = new Timer();
+        flashTimer.scheduleAtFixedRate(new TimerTask() {
+            boolean toggle = false;
+            @Override
+            public void run() {
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    if (tv != null) {
+                        tv.setBackgroundColor(toggle ? Color.GREEN : Color.RED);
+                        tv.setText(toggle ? "信号正常 (GREEN)" : "正在投屏 (RED)");
+                        toggle = !toggle;
+                    }
+                });
+            }
+        }, 0, 1000); // 每秒闪烁一次
+    }
 
+    // ... 身份伪造与越狱 (保持 V128 不变) ...
     private void stampIdentity(Object infoObj) {
         if (infoObj == null) return;
         try {
@@ -233,8 +252,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     
                     mainHandler.postDelayed(() -> {
                         captureCoreObjects(lpparam.classLoader);
-                        // 🔥 5秒后尝试点亮副屏
-                        initClusterDisplay(context);
+                        initClusterDisplay(context); 
                     }, 5000);
                 }
             });
@@ -305,7 +323,6 @@ public class MainHook implements IXposedHookLoadPackage {
                              currentVendor = 0; 
                              sendJavaBroadcast("🔄 强制重连 -> V0");
                              performLifecycleHandshake(); 
-                             // 手动触发一次投屏尝试
                              if (systemContext != null) initClusterDisplay(systemContext);
                         }
                         else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
@@ -396,7 +413,8 @@ public class MainHook implements IXposedHookLoadPackage {
         if (dashboardManagerInstance == null || mainHandler == null) return;
         try {
             clearClusterData();
-            if (clusterPresentation != null) { clusterPresentation.dismiss(); clusterPresentation = null; } // 关闭副屏
+            if (clusterPresentation != null) { clusterPresentation.dismiss(); clusterPresentation = null; }
+            if (flashTimer != null) { flashTimer.cancel(); flashTimer = null; }
             mainHandler.postDelayed(() -> {
                 injectStatus(Status.GUIDE_STOP);
                 sendJavaBroadcast("🛑 导航已停止");
@@ -434,15 +452,20 @@ public class MainHook implements IXposedHookLoadPackage {
     private void updateClusterDirectly() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
-            try { XposedHelpers.setObjectField(guideInfo, "packageName", TARGET_PKG); } catch (Throwable t) {}
             XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
             XposedHelpers.setIntField(guideInfo, "turnId", turnIcon); 
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", segmentDis);
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
-            XposedHelpers.setIntField(guideInfo, "guideType", 1); 
-            try { XposedHelpers.setIntField(guideInfo, "roadType", 1); } catch (Throwable t) {} 
+            
+            // 🟢 核心修正：GuideType = 0 (MAP MODE)
+            // 之前填 1 (TBT) 是错误的，导致仪表盘只等待箭头，不切视频通道
+            XposedHelpers.setIntField(guideInfo, "guideType", 0); 
+            
+            // 🟢 核心修正：RoadType = -1 (DEFAULT)
+            try { XposedHelpers.setIntField(guideInfo, "roadType", -1); } catch (Throwable t) {} 
+            
             try { XposedHelpers.setIntField(guideInfo, "cameraDistance", 0); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "cameraSpeed", 0); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "cameraType", 0); } catch (Throwable t) {}
@@ -453,7 +476,7 @@ public class MainHook implements IXposedHookLoadPackage {
             
             stampIdentity(guideInfo);
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V129: [V0][STAMPED][Dis:" + segmentDis + "]");
+            sendJavaBroadcast("💉 V130: [V0][MapMode:0][GreenScreen]");
         } catch (Throwable t) {
             sendJavaBroadcast("❌ 注入失败: " + t.getMessage());
         }
