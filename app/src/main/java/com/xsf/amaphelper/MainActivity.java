@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.widget.Button;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -19,41 +21,27 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
     
-    // 🟢 3个指示灯变量
-    private TextView tvLog, tvLsp, tvHook, tvIpc;
-    
-    private Button btnV0, btnV4, btnV5, btnV10, btnForceConnect, btnClose, btnSaveLog;
+    private TextView tvLog, tvStatusLsp, tvStatusHook;
     private ScrollView scrollView;
     private SimpleDateFormat sdf = new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
+    private boolean isHooked = false;
 
+    // Xposed 会 Hook 这个方法返回 true
     public boolean isModuleActive() { return false; }
 
-    private BroadcastReceiver receiver = new BroadcastReceiver() {
+    private BroadcastReceiver logReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context ctx, Intent intent) {
             String log = intent.getStringExtra("log");
-            if (log == null) return;
-            
-            // 🟢 精简后的点灯逻辑
-            // 1. 只要服务跑起来了，就说明Hook成功了 -> 点亮中间的灯
-            if (log.contains("STATUS_SERVICE_RUNNING")) {
-                setStatus(tvHook, "服务Hook: ✅");
+            if (log != null) {
+                appendLog(log);
+                if (log.contains("Hook成功") || log.contains("劫持")) {
+                    isHooked = true;
+                    updateStatus();
+                }
             }
-            // 2. 只要抓到对象了，说明链路通了 -> 点亮右边的灯
-            else if (log.contains("STATUS_IPC_CONNECTED")) {
-                setStatus(tvIpc, "IPC链路: ✅");
-            }
-            
-            appendLog(log);
         }
     };
-
-    private void setStatus(TextView tv, String text) {
-        if (tv != null) {
-            tv.setText(text);
-            tv.setTextColor(Color.GREEN);
-        }
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,96 +49,84 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         tvLog = findViewById(R.id.tv_log);
-        scrollView = findViewById(R.id.scrollView);
-        
-        tvLsp = findViewById(R.id.tv_lsp_status);
-        tvHook = findViewById(R.id.tv_hook_status);
-        tvIpc = findViewById(R.id.tv_ipc_status); // 删除了 tvSvc
+        tvStatusLsp = findViewById(R.id.tv_status_lsp);
+        tvStatusHook = findViewById(R.id.tv_status_hook);
+        scrollView = findViewById(R.id.scroll_log);
 
-        btnV0 = findViewById(R.id.btn_v0);
-        btnV4 = findViewById(R.id.btn_v4);
-        btnV5 = findViewById(R.id.btn_v5);
-        btnV10 = findViewById(R.id.btn_v10);
-        
-        btnForceConnect = findViewById(R.id.btn_force_connect);
-        btnSaveLog = findViewById(R.id.btn_save_log);
-        btnClose = findViewById(R.id.btn_close);
-
-        btnV0.setOnClickListener(v -> sendVendor(0));
-        btnV4.setOnClickListener(v -> sendVendor(4));
-        btnV5.setOnClickListener(v -> sendVendor(5));
-        btnV10.setOnClickListener(v -> sendVendor(10));
-
-        btnForceConnect.setOnClickListener(v -> {
-            sendBroadcast(new Intent("XSF_ACTION_FORCE_CONNECT"));
-            appendLog(">>> 发送强制连接指令");
+        // 按钮事件
+        findViewById(R.id.btn_start).setOnClickListener(v -> {
+            appendLog(">>> 发送指令: 开启投屏");
+            sendBroadcast(new Intent("XSF_ACTION_START_CAST"));
         });
 
-        btnSaveLog.setOnClickListener(v -> saveLogToFile());
-        
-        btnClose.setOnClickListener(v -> {
-            appendLog(">>> 正在停止投屏并退出...");
-            sendBroadcast(new Intent("XSF_ACTION_STOP"));
-            new android.os.Handler().postDelayed(() -> {
-                finish();
+        findViewById(R.id.btn_stop).setOnClickListener(v -> {
+            appendLog(">>> 发送指令: 关闭投屏");
+            sendBroadcast(new Intent("XSF_ACTION_STOP_CAST"));
+        });
+
+        findViewById(R.id.btn_save).setOnClickListener(v -> saveLog());
+
+        findViewById(R.id.btn_kill).setOnClickListener(v -> {
+            sendBroadcast(new Intent("XSF_ACTION_STOP_CAST"));
+            Toast.makeText(this, "正在清理退出...", Toast.LENGTH_SHORT).show();
+            new Handler().postDelayed(() -> {
+                finishAffinity();
                 System.exit(0);
             }, 500);
         });
 
+        // 注册日志广播
         IntentFilter filter = new IntentFilter("com.xsf.amaphelper.LOG_UPDATE");
-        registerReceiver(receiver, filter);
+        registerReceiver(logReceiver, filter);
         
-        sendBroadcast(new Intent("XSF_ACTION_SEND_STATUS"));
-    }
-
-    private void sendVendor(int v) {
-        Intent i = new Intent("XSF_ACTION_SET_VENDOR");
-        i.putExtra("vendor", v);
-        sendBroadcast(i);
-        appendLog(">>> 切换 Vendor: " + v);
-    }
-
-    private void saveLogToFile() {
-        String logContent = tvLog.getText().toString();
-        File dir = new File(getExternalFilesDir(null), "logs");
-        try {
-            if (!dir.exists()) dir.mkdirs();
-            String fileName = "Log_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date()) + ".txt";
-            File file = new File(dir, fileName);
-            FileOutputStream fos = new FileOutputStream(file);
-            fos.write(logContent.getBytes());
-            fos.close();
-            Toast.makeText(this, "已保存到: " + file.getAbsolutePath(), Toast.LENGTH_LONG).show();
-            appendLog("✅ 日志已保存", true);
-        } catch (Exception e) {
-            appendLog("❌ 保存失败: " + e.getMessage(), true);
-        }
-    }
-
-    private void appendLog(String m) { appendLog(m, false); }
-    
-    private void appendLog(String m, boolean force) {
-        runOnUiThread(() -> {
-            if (tvLog != null) {
-                if (tvLog.length() > 50000) tvLog.setText("");
-                tvLog.append("[" + sdf.format(new Date()) + "] " + m + "\n");
-                if (scrollView != null) scrollView.post(() -> scrollView.fullScroll(ScrollView.FOCUS_DOWN));
-            }
-        });
+        // 初始日志
+        appendLog("App启动完成，等待操作...");
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        boolean active = isModuleActive();
-        tvLsp.setText(active ? "LSP: ✅" : "LSP: ❌");
-        tvLsp.setTextColor(active ? Color.GREEN : Color.RED);
-        sendBroadcast(new Intent("XSF_ACTION_SEND_STATUS"));
+        updateStatus();
     }
-    
+
+    private void updateStatus() {
+        boolean active = isModuleActive();
+        tvStatusLsp.setText(active ? "LSP: 已激活" : "LSP: 未激活");
+        tvStatusLsp.setTextColor(active ? Color.GREEN : Color.RED);
+        
+        tvStatusHook.setText(isHooked ? "Hook: 运行中" : "Hook: 等待服务");
+        tvStatusHook.setTextColor(isHooked ? Color.GREEN : Color.YELLOW);
+    }
+
+    private void appendLog(String msg) {
+        runOnUiThread(() -> {
+            if (tvLog != null) {
+                if (tvLog.length() > 20000) tvLog.setText(""); // 防止卡顿
+                tvLog.append("[" + sdf.format(new Date()) + "] " + msg + "\n");
+                if (scrollView != null) scrollView.post(() -> scrollView.fullScroll(ScrollView.FOCUS_DOWN));
+            }
+        });
+    }
+
+    private void saveLog() {
+        try {
+            File dir = new File(getExternalFilesDir(null), "logs");
+            if (!dir.exists()) dir.mkdirs();
+            String name = "Log_" + System.currentTimeMillis() + ".txt";
+            File file = new File(dir, name);
+            FileOutputStream fos = new FileOutputStream(file);
+            fos.write(tvLog.getText().toString().getBytes());
+            fos.close();
+            Toast.makeText(this, "保存成功: " + file.getName(), Toast.LENGTH_LONG).show();
+            appendLog("日志已保存到: " + file.getAbsolutePath());
+        } catch (Exception e) {
+            appendLog("保存失败: " + e.getMessage());
+        }
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        try { unregisterReceiver(receiver); } catch (Exception e) {}
+        try { unregisterReceiver(logReceiver); } catch (Exception e) {}
     }
 }
