@@ -16,7 +16,8 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.WindowManager;
 import android.widget.TextView;
-import java.lang.reflect.Method;
+import java.lang.reflect.Field;  // 🟢 补全了！
+import java.lang.reflect.Method; // 🟢 补全了！
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Timer;
@@ -61,7 +62,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V130地图模式";
+    private static String nextRoadName = "V130-Final";
     private static int turnIcon = 2; 
     private static int segmentDis = 888;
     private static int routeRemainDis = 2000;
@@ -83,7 +84,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Set<String> hookedConfigClasses = new HashSet<>();
 
     private static Presentation clusterPresentation = null;
-    private static Timer flashTimer = null; // 🚨 爆闪定时器
+    private static Timer flashTimer = null; 
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -93,7 +94,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V130 地图模式矫正版启动");
+        XposedBridge.log("NaviHook: 🚀 V130-Final 地图模式修正版启动");
         
         initLBSHook(lpparam);
         setupDynamicJailbreak(lpparam.classLoader);
@@ -127,23 +128,19 @@ public class MainHook implements IXposedHookLoadPackage {
                     clusterPresentation.dismiss();
                 }
                 
-                // 🟢 修正：使用 TYPE_PRIVATE_PRESENTATION
-                // 并配合 TYPE_SYSTEM_ALERT 做兼容
                 clusterPresentation = new Presentation(context, display) {
                     @Override
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         
                         TextView tv = new TextView(getContext());
-                        tv.setText("V130 投屏测试\n地图模式(0)");
+                        tv.setText("V130 投屏测试\nMap Mode(0)");
                         tv.setTextColor(Color.WHITE);
                         tv.setTextSize(40);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.BLUE); // 初始蓝色
+                        tv.setBackgroundColor(Color.BLUE); 
                         
                         setContentView(tv);
-                        
-                        // 🚨 启动爆闪效果 (红/绿交替)
                         startFlashing(tv);
                     }
                 };
@@ -154,7 +151,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
                 }
                 
-                // 关键 Flags：全屏、无焦点、保持常亮
                 clusterPresentation.getWindow().addFlags(
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
@@ -164,7 +160,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 );
                 
                 clusterPresentation.show();
-                XposedBridge.log("NaviHook: ✅ 副屏画面已投射 (Flashing Mode)");
+                XposedBridge.log("NaviHook: ✅ 副屏画面已投射");
                 sendJavaBroadcast("✅ 视频通道已打通!");
                 
             } catch (Throwable t) {
@@ -174,7 +170,6 @@ public class MainHook implements IXposedHookLoadPackage {
         });
     }
 
-    // 🚨 爆闪逻辑：让屏幕动起来，防止被当做静态图片过滤
     private void startFlashing(TextView tv) {
         if (flashTimer != null) flashTimer.cancel();
         flashTimer = new Timer();
@@ -190,10 +185,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
             }
-        }, 0, 1000); // 每秒闪烁一次
+        }, 0, 1000); 
     }
 
-    // ... 身份伪造与越狱 (保持 V128 不变) ...
     private void stampIdentity(Object infoObj) {
         if (infoObj == null) return;
         try {
@@ -290,7 +284,7 @@ public class MainHook implements IXposedHookLoadPackage {
             mapSwitchInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_SWITCH_INFO, cl);
             
             Class<?> mgrClass = XposedHelpers.findClass(CLASS_DASHBOARD_MGR, cl);
-            Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE);
+            Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE); // 这里需要 Field 类
             instanceField.setAccessible(true);
             dashboardManagerInstance = instanceField.get(null);
             
@@ -459,11 +453,8 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
             
-            // 🟢 核心修正：GuideType = 0 (MAP MODE)
-            // 之前填 1 (TBT) 是错误的，导致仪表盘只等待箭头，不切视频通道
+            // 🟢 核心修正：Map Mode = 0 (不是 TBT 的 1)
             XposedHelpers.setIntField(guideInfo, "guideType", 0); 
-            
-            // 🟢 核心修正：RoadType = -1 (DEFAULT)
             try { XposedHelpers.setIntField(guideInfo, "roadType", -1); } catch (Throwable t) {} 
             
             try { XposedHelpers.setIntField(guideInfo, "cameraDistance", 0); } catch (Throwable t) {}
