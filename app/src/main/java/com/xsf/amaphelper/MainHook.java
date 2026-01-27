@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.UserHandle;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method; // 🟢 补上了这个关键引用
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Timer;
@@ -269,7 +270,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
         mainHandler.post(() -> {
             try {
-                // 1. 差异切换 (5->0)
+                // 1. 差异切换 (5->0) + 身份盖章
                 injectSwitch(fakeOldVendor, currentVendor, SwitchState.CRUISE_TO_GUIDE);
                 sendJavaBroadcast("⚡ [0/7] 身份伪造切换: V5 -> V0");
 
@@ -352,7 +353,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 🟢 应用身份盖章机
     private void injectSwitch(int oldV, int newV, int state) {
         try {
             Object switchInfo = XposedHelpers.newInstance(mapSwitchInfoClass, oldV, newV);
@@ -385,7 +385,6 @@ public class MainHook implements IXposedHookLoadPackage {
             
             XposedHelpers.setIntField(guideInfo, "guideType", 1); 
             
-            // 满血字段
             try { XposedHelpers.setIntField(guideInfo, "roadType", 1); } catch (Throwable t) {} 
             try { XposedHelpers.setIntField(guideInfo, "cameraDistance", 0); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "cameraSpeed", 0); } catch (Throwable t) {}
@@ -404,7 +403,6 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
     
-    // ... clearClusterData, extractData 等方法保持不变 ...
     private void clearClusterData() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
@@ -413,7 +411,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "turnId", 0);
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 0);
             XposedHelpers.setIntField(guideInfo, "guideType", 0);
-            stampIdentity(guideInfo); // 🔥 盖章！
+            stampIdentity(guideInfo);
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
         } catch (Throwable t) {}
     }
