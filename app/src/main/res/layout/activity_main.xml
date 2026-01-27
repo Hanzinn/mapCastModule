@@ -4,111 +4,115 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#000000"
-    android:padding="6dp">
+    android:padding="10dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#222222"
-        android:padding="10dp"
-        android:layout_marginBottom="8dp">
+        android:padding="15dp"
+        android:layout_marginBottom="15dp">
         
         <TextView 
-            android:id="@+id/tv_lsp_status" 
+            android:id="@+id/tv_status_lsp" 
             android:layout_width="0dp" 
             android:layout_height="wrap_content" 
             android:layout_weight="1" 
-            android:text="LSP" 
+            android:text="LSP: 未激活" 
             android:textColor="#FF0000" 
             android:gravity="center" 
-            android:textSize="14sp" 
             android:textStyle="bold"/>
             
         <TextView 
-            android:id="@+id/tv_hook_status" 
+            android:id="@+id/tv_status_hook" 
             android:layout_width="0dp" 
             android:layout_height="wrap_content" 
             android:layout_weight="1" 
-            android:text="服务Hook" 
-            android:textColor="#FF0000" 
+            android:text="Hook: 等待" 
+            android:textColor="#FFFF00" 
             android:gravity="center" 
-            android:textSize="14sp" 
-            android:textStyle="bold"/>
-            
-        <TextView 
-            android:id="@+id/tv_ipc_status" 
-            android:layout_width="0dp" 
-            android:layout_height="wrap_content" 
-            android:layout_weight="1" 
-            android:text="IPC链路" 
-            android:textColor="#FF0000" 
-            android:gravity="center" 
-            android:textSize="14sp" 
             android:textStyle="bold"/>
     </LinearLayout>
 
-    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical">
-        
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="5dp">
-            <Button android:id="@+id/btn_v0" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V0" android:textSize="12sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
-            <Button android:id="@+id/btn_v4" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V4" android:textSize="12sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
-            <Button android:id="@+id/btn_v5" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V5" android:textSize="12sp" android:backgroundTint="#555555" android:layout_marginEnd="2dp"/>
-            <Button android:id="@+id/btn_v10" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1" android:text="V10" android:textSize="12sp" android:backgroundTint="#555555"/>
-        </LinearLayout>
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="10dp">
 
         <Button 
-            android:id="@+id/btn_force_connect" 
-            android:layout_width="match_parent" 
-            android:layout_height="50dp" 
-            android:text="强制连接 (自动握手)" 
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:backgroundTint="#009688"
-            android:layout_marginBottom="8dp"/>
-
-        <ScrollView
-            android:id="@+id/scrollView"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
+            android:id="@+id/btn_start" 
+            android:layout_width="0dp" 
+            android:layout_height="70dp" 
             android:layout_weight="1"
-            android:background="#111111"
-            android:fillViewport="true">
-            <TextView 
-                android:id="@+id/tv_log" 
-                android:layout_width="match_parent" 
-                android:layout_height="wrap_content" 
-                android:textColor="#00FF00" 
-                android:padding="12dp" 
-                android:textSize="13sp" 
-                android:lineSpacingExtra="3dp"
-                android:fontFamily="monospace" 
-                android:text="等待日志..." />
-        </ScrollView>
-        
-        <LinearLayout 
+            android:text="开启投屏" 
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:backgroundTint="#1B5E20" 
+            android:textColor="#FFFFFF"
+            android:layout_marginEnd="5dp"/>
+            
+        <Button 
+            android:id="@+id/btn_stop" 
+            android:layout_width="0dp" 
+            android:layout_height="70dp" 
+            android:layout_weight="1"
+            android:text="关闭投屏" 
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:backgroundTint="#B71C1C" 
+            android:textColor="#FFFFFF"
+            android:layout_marginStart="5dp"/>
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="运行日志 (自动滚动):"
+        android:textColor="#888888"
+        android:textSize="12sp"/>
+
+    <ScrollView 
+        android:id="@+id/scroll_log"
+        android:layout_width="match_parent" 
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#121212"
+        android:padding="5dp"
+        android:fillViewport="true">
+        <TextView 
+            android:id="@+id/tv_log" 
             android:layout_width="match_parent" 
             android:layout_height="wrap_content" 
-            android:orientation="horizontal" 
-            android:layout_marginTop="5dp">
-            
-            <Button 
-                android:id="@+id/btn_save_log" 
-                android:layout_width="0dp" 
-                android:layout_height="50dp" 
-                android:layout_weight="1"
-                android:text="保存日志" 
-                android:backgroundTint="#444444"
-                android:layout_marginEnd="5dp"/>
-                
-            <Button 
-                android:id="@+id/btn_close" 
-                android:layout_width="0dp" 
-                android:layout_height="50dp" 
-                android:layout_weight="1"
-                android:text="关闭APP" 
-                android:textColor="#FFFFFF"
-                android:backgroundTint="#B71C1C"/>
-        </LinearLayout>
+            android:textColor="#00FF00" 
+            android:textSize="11sp" 
+            android:fontFamily="monospace" 
+            android:text="V136 准备就绪..." />
+    </ScrollView>
+    
+    <LinearLayout 
+        android:layout_width="match_parent" 
+        android:layout_height="wrap_content" 
+        android:orientation="horizontal" 
+        android:layout_marginTop="10dp">
         
+        <Button 
+            android:id="@+id/btn_save" 
+            android:layout_width="0dp" 
+            android:layout_height="50dp" 
+            android:layout_weight="1"
+            android:text="保存日志" 
+            android:backgroundTint="#424242"
+            android:layout_marginEnd="5dp"/>
+            
+        <Button 
+            android:id="@+id/btn_kill" 
+            android:layout_width="0dp" 
+            android:layout_height="50dp" 
+            android:layout_weight="1"
+            android:text="清除退出" 
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#616161"
+            android:layout_marginStart="5dp"/>
     </LinearLayout>
 </LinearLayout>
