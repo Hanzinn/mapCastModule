@@ -3,21 +3,26 @@
     package="com.xsf.amaphelper">
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <queries>
+        <package android:name="com.autonavi.amapauto" />
+        <package android:name="ecarx.naviservice" />
+    </queries>
 
     <application
         android:allowBackup="true"
-        android:label="投屏助手"
+        android:label="投屏助手V136"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Black.NoTitleBar"
         android:requestLegacyExternalStorage="true">
         
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" 
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -25,7 +30,7 @@
         </activity>
 
         <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription" android:value="高德地图投屏模块" />
+        <meta-data android:name="xposeddescription" android:value="高德投屏 V136-LogMonster" />
         <meta-data android:name="xposedminversion" android:value="54" />
     </application>
 </manifest>
