@@ -10,7 +10,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.UserHandle;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Timer;
@@ -28,7 +27,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
     
-    // 🎯 核心机密：系统只认这个名字
+    // 🎯 核心伪造目标：官方高德 7.5 的包名
     private static final String TARGET_PKG = "com.autonavi.amapauto"; 
 
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
@@ -56,17 +55,15 @@ public class MainHook implements IXposedHookLoadPackage {
         static final int GUIDE_TO_CRUISE = 2; 
     }
 
-    private static String curRoadName = "等待高德数据";
-    private static String nextRoadName = "V127身份验证";
+    private static String curRoadName = "等待数据";
+    private static String nextRoadName = "V128身份全覆盖";
     private static int turnIcon = 2; 
     private static int segmentDis = 888;
     private static int routeRemainDis = 2000;
     private static int routeRemainTime = 600;
     
-    // 🟢 锁定 V0 (官方高德通道)
-    private static int currentVendor = 0; 
-    // 🟢 差异切换起点 (5是系统默认，用来骗系统刷新)
-    private static int fakeOldVendor = 5;
+    private static int currentVendor = 0; // 锁定 V0
+    private static int fakeOldVendor = 5; // 用于制造差异
     
     private static Object dashboardManagerInstance = null;
     private static Class<?> mapGuideInfoClass = null; 
@@ -88,13 +85,35 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V127-Pro 精准身份伪装版启动");
+        XposedBridge.log("NaviHook: 🚀 V128 全链路身份伪造版启动");
         
         initLBSHook(lpparam);
-        // 越狱：确保校验通过
         setupDynamicJailbreak(lpparam.classLoader);
-        // 伪装：Hook 底层模型返回正确包名
         hookNaviBaseModel(lpparam.classLoader);
+    }
+
+    // 🟢 核心 1：通用盖章机 (Identity Stamper)
+    // 无论发什么对象，先调用这个方法填上包名
+    private void stampIdentity(Object infoObj) {
+        if (infoObj == null) return;
+        try {
+            // 1. 尝试直接设置字段 (MapGuideInfo, MapStatusInfo 可能直接有这些字段)
+            try { XposedHelpers.setObjectField(infoObj, "packageName", TARGET_PKG); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(infoObj, "protocolVersion", "10"); } catch (Throwable t) {} // 7.5 日志里的版本
+            
+            // 2. 尝试设置父类或 base 字段 (如果它们继承自 NaviBaseModel)
+            // 很多时候 infoObj.base 才是重点
+            try {
+                Object baseModel = XposedHelpers.getObjectField(infoObj, "base");
+                if (baseModel != null) {
+                    XposedHelpers.setObjectField(baseModel, "packageName", TARGET_PKG);
+                    XposedHelpers.setObjectField(baseModel, "mapVendor", String.valueOf(currentVendor));
+                }
+            } catch (Throwable t) {}
+            
+        } catch (Throwable t) {
+            // 忽略错误，尽力而为
+        }
     }
 
     private void setupDynamicJailbreak(ClassLoader cl) {
@@ -116,7 +135,6 @@ public class MainHook implements IXposedHookLoadPackage {
         String className = realClass.getName();
         if (hookedConfigClasses.contains(className)) return; 
         try {
-            // 强制返回 0，让系统以为我们是原厂高德
             XposedHelpers.findAndHookMethod(realClass, "b", new XC_MethodReplacement() {
                 @Override
                 protected Object replaceHookedMethod(MethodHookParam param) {
@@ -138,40 +156,34 @@ public class MainHook implements IXposedHookLoadPackage {
                     mainHandler = new Handler(Looper.getMainLooper());
                     registerReceiver(context);
                     sendJavaBroadcast("STATUS_SERVICE_RUNNING");
-                    // 延时5秒抓捕，防止 crash
                     mainHandler.postDelayed(() -> captureCoreObjects(lpparam.classLoader), 5000);
                 }
             });
         } catch (Throwable t) {}
     }
 
-    // 🟢 核心 1：底层身份伪造
     private void hookNaviBaseModel(ClassLoader cl) {
         try {
             Class<?> baseModelClass = XposedHelpers.findClassIfExists(CLASS_NAVI_BASE_MODEL, cl);
             if (baseModelClass != null) {
-                // 1. 永远返回 com.autonavi.amapauto
                 XposedHelpers.findAndHookMethod(baseModelClass, "getPackageName", new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) {
                         return TARGET_PKG; 
                     }
                 });
-                // 2. 永远返回 Vendor 0
                 XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) {
                         return currentVendor; 
                     }
                 });
-                XposedBridge.log("NaviHook: 👮‍♂️ 身份伪造已就绪 (NaviBaseModel)");
             }
         } catch (Throwable t) {}
     }
 
     private void captureCoreObjects(ClassLoader cl) {
         try {
-            // 触发一次配置读取，激活越狱Hook
             try {
                 Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
                 if (wrapperClass != null) {
@@ -208,16 +220,13 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                         String action = intent.getAction();
                         if (AMAP_ACTION.equals(action)) {
-                            // 收到 9.1 的广播
                             Bundle b = intent.getExtras();
                             if (b != null) {
                                 extractData(b);
-                                // 立即转发给仪表，这时候数据会被加上包名
                                 if (isHookReady) updateClusterDirectly(); 
                             }
                         }
                         else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                             // 手动重置
                              currentVendor = 0; 
                              sendJavaBroadcast("🔄 强制重连 -> V0");
                              performLifecycleHandshake(); 
@@ -260,13 +269,12 @@ public class MainHook implements IXposedHookLoadPackage {
 
         mainHandler.post(() -> {
             try {
-                // 1. 差异切换：假装从 V5 (默认) 切到 V0 (高德)
-                // 这会让系统重新初始化 V0 的状态
+                // 1. 差异切换 (5->0)
                 injectSwitch(fakeOldVendor, currentVendor, SwitchState.CRUISE_TO_GUIDE);
-                sendJavaBroadcast("⚡ [0/7] 身份激活: V5 -> V0");
+                sendJavaBroadcast("⚡ [0/7] 身份伪造切换: V5 -> V0");
 
                 mainHandler.postDelayed(() -> {
-                    // 2. 状态机握手 (带身份)
+                    // 2. 状态机握手 (全程盖章)
                     injectStatus(Status.APP_START);
                     sendJavaBroadcast("⚡ [1/7] APP启动(7)");
 
@@ -290,7 +298,6 @@ public class MainHook implements IXposedHookLoadPackage {
                                         injectStatus(Status.GUIDE_START);
                                         sendJavaBroadcast("⚡ [6/7] 导航开始(16) -> ✅");
                                         
-                                        // 启动心跳保活
                                         startHeartbeat();
                                         
                                         isHandshaking = false;
@@ -313,13 +320,11 @@ public class MainHook implements IXposedHookLoadPackage {
         heartbeatTimer = new Timer();
         segmentDis = 888;
         
-        // 如果没有真实导航数据，每2秒发一次心跳包维持连接
         heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
                 if (dashboardManagerInstance == null) return;
                 mainHandler.post(() -> {
-                    // 只有当 isHookReady 为 true 时才发，避免打断握手
                     if (isHookReady) updateClusterDirectly();
                 });
             }
@@ -335,7 +340,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 injectStatus(Status.GUIDE_STOP);
                 sendJavaBroadcast("🛑 导航已停止");
                 mainHandler.postDelayed(() -> {
-                    // 退出时：切回默认 V5
                     injectSwitch(currentVendor, fakeOldVendor, SwitchState.GUIDE_TO_CRUISE);
                     sendJavaBroadcast("🛑 切回巡航");
                     mainHandler.postDelayed(() -> {
@@ -348,33 +352,40 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
+    // 🟢 应用身份盖章机
     private void injectSwitch(int oldV, int newV, int state) {
         try {
             Object switchInfo = XposedHelpers.newInstance(mapSwitchInfoClass, oldV, newV);
             XposedHelpers.setIntField(switchInfo, "mSwitchState", state);
+            stampIdentity(switchInfo); // 🔥 盖章！
             XposedHelpers.callMethod(dashboardManagerInstance, "a", switchInfo);
         } catch (Throwable t) {}
     }
 
-    // 🟢 核心 2：数据包“贴牌” (Brand Labeling)
+    private void injectStatus(int status) {
+        try {
+            Object statusInfo = XposedHelpers.newInstance(mapStatusInfoClass, currentVendor);
+            XposedHelpers.setIntField(statusInfo, "status", status);
+            stampIdentity(statusInfo); // 🔥 盖章！
+            XposedHelpers.callMethod(dashboardManagerInstance, "a", statusInfo);
+        } catch (Throwable t) {}
+    }
+
     private void updateClusterDirectly() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
 
-            // 🔥 关键点：显式填入包名
-            // 就算 hookNaviBaseModel 漏了，这里也能手动补上
-            try { XposedHelpers.setObjectField(guideInfo, "packageName", TARGET_PKG); } catch (Throwable t) {}
-
-            // 基础数据
             XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
+            
             XposedHelpers.setIntField(guideInfo, "turnId", turnIcon); 
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", segmentDis);
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
             
-            // 满血字段 (从 7.5 抄来的)
             XposedHelpers.setIntField(guideInfo, "guideType", 1); 
+            
+            // 满血字段
             try { XposedHelpers.setIntField(guideInfo, "roadType", 1); } catch (Throwable t) {} 
             try { XposedHelpers.setIntField(guideInfo, "cameraDistance", 0); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "cameraSpeed", 0); } catch (Throwable t) {}
@@ -384,14 +395,16 @@ public class MainHook implements IXposedHookLoadPackage {
             try { XposedHelpers.setIntField(guideInfo, "trafficLightIcon", 0); } catch (Throwable t) {}
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
             
+            stampIdentity(guideInfo); // 🔥 盖章！
+            
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V127: [V0][PKG:OK][Dis:" + segmentDis + "]");
+            sendJavaBroadcast("💉 V128: [V0][STAMPED][Dis:" + segmentDis + "]");
         } catch (Throwable t) {
             sendJavaBroadcast("❌ 注入失败: " + t.getMessage());
         }
     }
     
-    // ... extractData, clearClusterData, injectStatus, sendJavaBroadcast 保持不变 ...
+    // ... clearClusterData, extractData 等方法保持不变 ...
     private void clearClusterData() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
@@ -400,15 +413,8 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "turnId", 0);
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 0);
             XposedHelpers.setIntField(guideInfo, "guideType", 0);
+            stampIdentity(guideInfo); // 🔥 盖章！
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-        } catch (Throwable t) {}
-    }
-
-    private void injectStatus(int status) {
-        try {
-            Object statusInfo = XposedHelpers.newInstance(mapStatusInfoClass, currentVendor);
-            XposedHelpers.setIntField(statusInfo, "status", status);
-            XposedHelpers.callMethod(dashboardManagerInstance, "a", statusInfo);
         } catch (Throwable t) {}
     }
     
