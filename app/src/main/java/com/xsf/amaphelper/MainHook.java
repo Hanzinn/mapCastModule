@@ -1,16 +1,23 @@
 package com.xsf.amaphelper;
 
 import android.app.Application;
+import android.app.Presentation; // 🟢 必须引入
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Color; // 🟢 必须引入
+import android.hardware.display.DisplayManager; // 🟢 必须引入
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserHandle;
+import android.view.Display; // 🟢 必须引入
+import android.view.Gravity; // 🟢 必须引入
+import android.view.WindowManager; // 🟢 必须引入
+import android.widget.TextView; // 🟢 必须引入
 import java.lang.reflect.Field;
-import java.lang.reflect.Method; // 🟢 补上了这个关键引用
+import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Timer;
@@ -27,8 +34,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SERVICE = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
-    
-    // 🎯 核心伪造目标：官方高德 7.5 的包名
     private static final String TARGET_PKG = "com.autonavi.amapauto"; 
 
     private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
@@ -56,15 +61,15 @@ public class MainHook implements IXposedHookLoadPackage {
         static final int GUIDE_TO_CRUISE = 2; 
     }
 
-    private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V128身份全覆盖";
+    private static String curRoadName = "视频通道测试";
+    private static String nextRoadName = "V129";
     private static int turnIcon = 2; 
     private static int segmentDis = 888;
-    private static int routeRemainDis = 2000;
+    private static int routeRemainDis = 2500;
     private static int routeRemainTime = 600;
     
-    private static int currentVendor = 0; // 锁定 V0
-    private static int fakeOldVendor = 5; // 用于制造差异
+    private static int currentVendor = 0; 
+    private static int fakeOldVendor = 5; 
     
     private static Object dashboardManagerInstance = null;
     private static Class<?> mapGuideInfoClass = null; 
@@ -78,6 +83,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Timer heartbeatTimer = null;
     private static Set<String> hookedConfigClasses = new HashSet<>();
 
+    // 🆕 全局变量：保存副屏窗口对象
+    private static Presentation clusterPresentation = null;
+
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (lpparam.packageName.equals(PKG_SELF)) {
@@ -86,24 +94,92 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V128 全链路身份伪造版启动");
+        XposedBridge.log("NaviHook: 🚀 V129 视频通道激活版启动");
         
         initLBSHook(lpparam);
         setupDynamicJailbreak(lpparam.classLoader);
         hookNaviBaseModel(lpparam.classLoader);
     }
 
-    // 🟢 核心 1：通用盖章机 (Identity Stamper)
-    // 无论发什么对象，先调用这个方法填上包名
+    // 🟢 核心新功能：寻找并点亮副屏
+    private void initClusterDisplay(Context context) {
+        try {
+            DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+            Display[] displays = dm.getDisplays();
+            
+            XposedBridge.log("NaviHook: 🖥️ 扫描屏幕... 总数: " + displays.length);
+            sendJavaBroadcast("🖥️ 屏幕数量: " + displays.length);
+
+            for (Display display : displays) {
+                int id = display.getDisplayId();
+                String name = display.getName();
+                XposedBridge.log("NaviHook: 🖥️ 发现屏幕 ID=" + id + " Name=" + name);
+                
+                // ID 0 通常是中控屏，我们需要找 ID 不为 0 的屏幕（仪表盘）
+                if (id != 0) { 
+                    XposedBridge.log("NaviHook: 🎯 锁定目标副屏 ID=" + id + "，准备投射...");
+                    showPresentation(context, display);
+                    return; 
+                }
+            }
+            sendJavaBroadcast("⚠️ 未找到副屏，无法投射画面");
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: ❌ 副屏初始化失败: " + t);
+            sendJavaBroadcast("❌ 副屏异常: " + t.getMessage());
+        }
+    }
+
+    // 🟢 核心新功能：创建绿色背景+红字的测试画面
+    private void showPresentation(Context context, Display display) {
+        mainHandler.post(() -> {
+            try {
+                if (clusterPresentation != null) {
+                    clusterPresentation.dismiss();
+                }
+                
+                // 创建 Presentation (异显窗口)
+                clusterPresentation = new Presentation(context, display) {
+                    @Override
+                    protected void onCreate(Bundle savedInstanceState) {
+                        super.onCreate(savedInstanceState);
+                        
+                        // 构建一个显眼的界面：绿底红字
+                        TextView tv = new TextView(getContext());
+                        tv.setText("V129 视频通道\n激活成功!");
+                        tv.setTextColor(Color.RED);
+                        tv.setTextSize(40);
+                        tv.setGravity(Gravity.CENTER);
+                        tv.setBackgroundColor(Color.GREEN); // 亮绿色背景，确保一眼能看到
+                        
+                        setContentView(tv);
+                    }
+                };
+                
+                // 设置窗口类型为系统覆盖层，保证权限足够
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                } else {
+                    clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+                }
+                
+                clusterPresentation.show();
+                XposedBridge.log("NaviHook: ✅ 副屏画面已投射 (Green Screen)");
+                sendJavaBroadcast("✅ 视频通道已打通!");
+                
+            } catch (Throwable t) {
+                XposedBridge.log("NaviHook: ❌ 投屏创建失败: " + t);
+                sendJavaBroadcast("❌ 投屏失败: " + t);
+            }
+        });
+    }
+
+    // ... 下面是 V128 的完整逻辑，完全保留 ...
+
     private void stampIdentity(Object infoObj) {
         if (infoObj == null) return;
         try {
-            // 1. 尝试直接设置字段 (MapGuideInfo, MapStatusInfo 可能直接有这些字段)
             try { XposedHelpers.setObjectField(infoObj, "packageName", TARGET_PKG); } catch (Throwable t) {}
-            try { XposedHelpers.setObjectField(infoObj, "protocolVersion", "10"); } catch (Throwable t) {} // 7.5 日志里的版本
-            
-            // 2. 尝试设置父类或 base 字段 (如果它们继承自 NaviBaseModel)
-            // 很多时候 infoObj.base 才是重点
+            try { XposedHelpers.setObjectField(infoObj, "protocolVersion", "10"); } catch (Throwable t) {}
             try {
                 Object baseModel = XposedHelpers.getObjectField(infoObj, "base");
                 if (baseModel != null) {
@@ -111,10 +187,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     XposedHelpers.setObjectField(baseModel, "mapVendor", String.valueOf(currentVendor));
                 }
             } catch (Throwable t) {}
-            
-        } catch (Throwable t) {
-            // 忽略错误，尽力而为
-        }
+        } catch (Throwable t) {}
     }
 
     private void setupDynamicJailbreak(ClassLoader cl) {
@@ -157,7 +230,12 @@ public class MainHook implements IXposedHookLoadPackage {
                     mainHandler = new Handler(Looper.getMainLooper());
                     registerReceiver(context);
                     sendJavaBroadcast("STATUS_SERVICE_RUNNING");
-                    mainHandler.postDelayed(() -> captureCoreObjects(lpparam.classLoader), 5000);
+                    
+                    mainHandler.postDelayed(() -> {
+                        captureCoreObjects(lpparam.classLoader);
+                        // 🔥 5秒后尝试点亮副屏
+                        initClusterDisplay(context);
+                    }, 5000);
                 }
             });
         } catch (Throwable t) {}
@@ -169,15 +247,11 @@ public class MainHook implements IXposedHookLoadPackage {
             if (baseModelClass != null) {
                 XposedHelpers.findAndHookMethod(baseModelClass, "getPackageName", new XC_MethodReplacement() {
                     @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) {
-                        return TARGET_PKG; 
-                    }
+                    protected Object replaceHookedMethod(MethodHookParam param) { return TARGET_PKG; }
                 });
                 XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", new XC_MethodReplacement() {
                     @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) {
-                        return currentVendor; 
-                    }
+                    protected Object replaceHookedMethod(MethodHookParam param) { return currentVendor; }
                 });
             }
         } catch (Throwable t) {}
@@ -231,10 +305,13 @@ public class MainHook implements IXposedHookLoadPackage {
                              currentVendor = 0; 
                              sendJavaBroadcast("🔄 强制重连 -> V0");
                              performLifecycleHandshake(); 
+                             // 手动触发一次投屏尝试
+                             if (systemContext != null) initClusterDisplay(systemContext);
                         }
                         else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
                             captureCoreObjects(context.getClassLoader());
                             performLifecycleHandshake();
+                            if (systemContext != null) initClusterDisplay(systemContext);
                         }
                         else if ("XSF_ACTION_STOP".equals(action)) {
                             stopProjection();
@@ -256,51 +333,36 @@ public class MainHook implements IXposedHookLoadPackage {
         isHandshaking = true; 
         isHookReady = false;
         if (heartbeatTimer != null) { heartbeatTimer.cancel(); heartbeatTimer = null; }
-        
-        mainHandler.postDelayed(() -> {
-            if (isHandshaking) { isHandshaking = false; isHookReady = true; }
-        }, 10000);
-        
+        mainHandler.postDelayed(() -> { if (isHandshaking) { isHandshaking = false; isHookReady = true; } }, 10000);
         runHandshakeSequence();
     }
 
     private void runHandshakeSequence() {
         final int STEP_DELAY = 200;
         final int MODE_SWITCH_DELAY = 500;
-
         mainHandler.post(() -> {
             try {
-                // 1. 差异切换 (5->0) + 身份盖章
                 injectSwitch(fakeOldVendor, currentVendor, SwitchState.CRUISE_TO_GUIDE);
                 sendJavaBroadcast("⚡ [0/7] 身份伪造切换: V5 -> V0");
-
                 mainHandler.postDelayed(() -> {
-                    // 2. 状态机握手 (全程盖章)
                     injectStatus(Status.APP_START);
                     sendJavaBroadcast("⚡ [1/7] APP启动(7)");
-
                     mainHandler.postDelayed(() -> {
                         injectStatus(Status.APP_START_FINISH);
                         sendJavaBroadcast("⚡ [2/7] 启动完成(8)");
-
                         mainHandler.postDelayed(() -> {
                             injectStatus(Status.APP_ACTIVE);
                             sendJavaBroadcast("⚡ [3/7] APP活跃(12)");
-                            
                             mainHandler.postDelayed(() -> {
                                 injectStatus(Status.ROUTE_START);
                                 sendJavaBroadcast("⚡ [4/7] 路径计算(13)");
-                                
                                 mainHandler.postDelayed(() -> {
                                     injectStatus(Status.ROUTE_SUCCESS);
                                     sendJavaBroadcast("⚡ [5/7] 计算成功(14)");
-                                    
                                     mainHandler.postDelayed(() -> {
                                         injectStatus(Status.GUIDE_START);
                                         sendJavaBroadcast("⚡ [6/7] 导航开始(16) -> ✅");
-                                        
                                         startHeartbeat();
-                                        
                                         isHandshaking = false;
                                         isHookReady = true;
                                     }, STEP_DELAY);
@@ -320,14 +382,11 @@ public class MainHook implements IXposedHookLoadPackage {
         if (heartbeatTimer != null) heartbeatTimer.cancel();
         heartbeatTimer = new Timer();
         segmentDis = 888;
-        
         heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
                 if (dashboardManagerInstance == null) return;
-                mainHandler.post(() -> {
-                    if (isHookReady) updateClusterDirectly();
-                });
+                mainHandler.post(() -> { if (isHookReady) updateClusterDirectly(); });
             }
         }, 0, 2000); 
     }
@@ -337,6 +396,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (dashboardManagerInstance == null || mainHandler == null) return;
         try {
             clearClusterData();
+            if (clusterPresentation != null) { clusterPresentation.dismiss(); clusterPresentation = null; } // 关闭副屏
             mainHandler.postDelayed(() -> {
                 injectStatus(Status.GUIDE_STOP);
                 sendJavaBroadcast("🛑 导航已停止");
@@ -357,7 +417,7 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object switchInfo = XposedHelpers.newInstance(mapSwitchInfoClass, oldV, newV);
             XposedHelpers.setIntField(switchInfo, "mSwitchState", state);
-            stampIdentity(switchInfo); // 🔥 盖章！
+            stampIdentity(switchInfo); 
             XposedHelpers.callMethod(dashboardManagerInstance, "a", switchInfo);
         } catch (Throwable t) {}
     }
@@ -366,7 +426,7 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object statusInfo = XposedHelpers.newInstance(mapStatusInfoClass, currentVendor);
             XposedHelpers.setIntField(statusInfo, "status", status);
-            stampIdentity(statusInfo); // 🔥 盖章！
+            stampIdentity(statusInfo); 
             XposedHelpers.callMethod(dashboardManagerInstance, "a", statusInfo);
         } catch (Throwable t) {}
     }
@@ -374,17 +434,14 @@ public class MainHook implements IXposedHookLoadPackage {
     private void updateClusterDirectly() {
         try {
             Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
-
+            try { XposedHelpers.setObjectField(guideInfo, "packageName", TARGET_PKG); } catch (Throwable t) {}
             XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
             XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
-            
             XposedHelpers.setIntField(guideInfo, "turnId", turnIcon); 
             XposedHelpers.setIntField(guideInfo, "nextTurnDistance", segmentDis);
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
-            
             XposedHelpers.setIntField(guideInfo, "guideType", 1); 
-            
             try { XposedHelpers.setIntField(guideInfo, "roadType", 1); } catch (Throwable t) {} 
             try { XposedHelpers.setIntField(guideInfo, "cameraDistance", 0); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "cameraSpeed", 0); } catch (Throwable t) {}
@@ -394,10 +451,9 @@ public class MainHook implements IXposedHookLoadPackage {
             try { XposedHelpers.setIntField(guideInfo, "trafficLightIcon", 0); } catch (Throwable t) {}
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
             
-            stampIdentity(guideInfo); // 🔥 盖章！
-            
+            stampIdentity(guideInfo);
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V128: [V0][STAMPED][Dis:" + segmentDis + "]");
+            sendJavaBroadcast("💉 V129: [V0][STAMPED][Dis:" + segmentDis + "]");
         } catch (Throwable t) {
             sendJavaBroadcast("❌ 注入失败: " + t.getMessage());
         }
