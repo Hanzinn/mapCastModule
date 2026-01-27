@@ -2,527 +2,343 @@ package com.xsf.amaphelper;
 
 import android.app.Application;
 import android.app.Presentation;
+import android.app.Service;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.graphics.Color;
 import android.hardware.display.DisplayManager;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
+import android.os.Parcel;
+import android.os.RemoteException;
 import android.os.UserHandle;
 import android.view.Display;
 import android.view.Gravity;
+import android.view.Surface;
 import android.view.WindowManager;
 import android.widget.TextView;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.Timer;
-import java.util.TimerTask;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
 import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
+    // 目标包名
     private static final String PKG_SERVICE = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
-    private static final String AMAP_ACTION = "AUTONAVI_STANDARD_BROADCAST_SEND";
-    private static final String TARGET_PKG = "com.autonavi.amapauto"; 
+    private static final String PKG_MAP = "com.autonavi.amapauto";
 
-    private static final String CLASS_DASHBOARD_MGR = "ecarx.naviservice.a.a";
-    private static final String FIELD_INSTANCE = "b";
-    
-    private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
-    private static final String CLASS_MAP_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo";
-    private static final String CLASS_MAP_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
-    private static final String CLASS_MAP_SWITCH_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
-    private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel";
+    // 关键类名 (根据你上传的 smali 确认)
+    private static final String CLASS_MAP_CONFIG = "ecarx.naviservice.map.ce"; 
+    private static final String TARGET_AIDL_INTERFACE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
+    private static final String TARGET_SERVICE_IMPL = "com.autosimilarwidget.view.AutoSimilarWidgetViewService";
 
-    private static class Status {
-        static final int APP_START = 7;
-        static final int APP_START_FINISH = 8;
-        static final int APP_ACTIVE = 12;
-        static final int ROUTE_START = 13;
-        static final int ROUTE_SUCCESS = 14;
-        static final int GUIDE_START = 16;
-        static final int GUIDE_STOP = 17;
-        static final int APP_FINISH = 9;
-    }
-    
-    private static class SwitchState {
-        static final int CRUISE_TO_GUIDE = 3; 
-        static final int GUIDE_TO_CRUISE = 2; 
-    }
-
-    private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V131窗口适配";
-    private static int turnIcon = 2; 
-    private static int segmentDis = 888;
-    private static int routeRemainDis = 2000;
-    private static int routeRemainTime = 600;
-    
-    private static int currentVendor = 0; 
-    private static int fakeOldVendor = 5; 
-    
-    private static Object dashboardManagerInstance = null;
-    private static Class<?> mapGuideInfoClass = null; 
-    private static Class<?> mapStatusInfoClass = null;
-    private static Class<?> mapSwitchInfoClass = null;
-    
-    private static boolean isHookReady = false;
-    private static boolean isHandshaking = false;
+    // 全局变量
     private static Context systemContext = null;
     private static Handler mainHandler = null;
-    private static Timer heartbeatTimer = null;
-    private static Set<String> hookedConfigClasses = new HashSet<>();
-
-    private static Presentation clusterPresentation = null;
-    private static Timer flashTimer = null; 
+    private static Presentation clusterWindow = null;
+    private static Binder fakeServiceBinder = null;
+    private static boolean isReceiverRegistered = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+        // 1. 激活模块自身UI显示状态
         if (lpparam.packageName.equals(PKG_SELF)) {
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, "isModuleActive", XC_MethodReplacement.returnConstant(true));
             return;
         }
+
+        // 2. 只 Hook 导航服务
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V131 万能窗口适配版启动");
-        
-        initLBSHook(lpparam);
-        setupDynamicJailbreak(lpparam.classLoader);
-        hookNaviBaseModel(lpparam.classLoader);
-    }
+        XposedBridge.log("NaviHook: 🚀 V136 启动 - 注入进程: " + lpparam.processName);
 
-    private void initClusterDisplay(Context context) {
-        try {
-            DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
-            Display[] displays = dm.getDisplays();
-            
-            XposedBridge.log("NaviHook: 🖥️ 扫描屏幕... 总数: " + displays.length);
-            
-            for (Display display : displays) {
-                int id = display.getDisplayId();
-                if (id != 0) { 
-                    XposedBridge.log("NaviHook: 🎯 锁定目标副屏 ID=" + id + " (" + display.getName() + ")");
-                    showPresentation(context, display);
-                    return; 
+        // 3. 获取 System Context (双重保险)
+        // 方案A: Application.onCreate
+        XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                Context ctx = (Context) param.thisObject;
+                if (systemContext == null) {
+                    systemContext = ctx;
+                    mainHandler = new Handler(Looper.getMainLooper());
+                    XposedBridge.log("NaviHook: ✅ 通过 Application 拿到 Context");
+                    initEverything();
                 }
-            }
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: ❌ 副屏初始化失败: " + t);
-        }
-    }
-
-    private void showPresentation(Context context, Display display) {
-        mainHandler.post(() -> {
-            try {
-                if (clusterPresentation != null) {
-                    clusterPresentation.dismiss();
-                    clusterPresentation = null;
-                }
-                
-                // 🟢 关键修正：使用 createDisplayContext 获取正确的 Display Context
-                Context displayContext = context.createDisplayContext(display);
-                
-                // 窗口类型试错列表
-                // 2038: APPLICATION_OVERLAY (Android 8.0+ 标准)
-                // 2003: SYSTEM_ALERT (旧版标准)
-                // 2006: SYSTEM_OVERLAY (系统级，不可点击)
-                // 2002: TYPE_PHONE (极旧版)
-                // 2005: TOAST (有些系统不校验权限)
-                int[] windowTypes = {2038, 2003, 2006, 2002, 2005};
-                
-                boolean success = false;
-                
-                for (int type : windowTypes) {
-                    try {
-                        XposedBridge.log("NaviHook: 🔄 尝试窗口类型: " + type);
-                        
-                        clusterPresentation = new Presentation(displayContext, display) {
-                            @Override
-                            protected void onCreate(Bundle savedInstanceState) {
-                                super.onCreate(savedInstanceState);
-                                TextView tv = new TextView(getContext());
-                                tv.setText("V131 成功!\nType: " + type);
-                                tv.setTextColor(Color.WHITE);
-                                tv.setTextSize(40);
-                                tv.setGravity(Gravity.CENTER);
-                                tv.setBackgroundColor(Color.BLUE); 
-                                setContentView(tv);
-                                startFlashing(tv);
-                            }
-                        };
-                        
-                        // 设置窗口参数
-                        clusterPresentation.getWindow().setType(type);
-                        clusterPresentation.getWindow().addFlags(
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
-                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
-                            WindowManager.LayoutParams.FLAG_FULLSCREEN |
-                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                        );
-                        
-                        clusterPresentation.show();
-                        
-                        XposedBridge.log("NaviHook: ✅ 窗口创建成功! 类型: " + type);
-                        sendJavaBroadcast("✅ 投屏成功! 类型: " + type);
-                        success = true;
-                        break; // 成功则退出循环
-                        
-                    } catch (Throwable t) {
-                        XposedBridge.log("NaviHook: ⚠️ 类型 " + type + " 失败: " + t.getMessage());
-                        if (clusterPresentation != null) {
-                            try { clusterPresentation.dismiss(); } catch (Throwable e) {}
-                            clusterPresentation = null;
-                        }
-                    }
-                }
-                
-                if (!success) {
-                    sendJavaBroadcast("❌ 所有窗口类型均失败，请检查系统权限");
-                }
-                
-            } catch (Throwable t) {
-                XposedBridge.log("NaviHook: ❌ 投屏逻辑致命错误: " + t);
             }
         });
-    }
-
-    private void startFlashing(TextView tv) {
-        if (flashTimer != null) flashTimer.cancel();
-        flashTimer = new Timer();
-        flashTimer.scheduleAtFixedRate(new TimerTask() {
-            boolean toggle = false;
-            @Override
-            public void run() {
-                new Handler(Looper.getMainLooper()).post(() -> {
-                    if (tv != null) {
-                        tv.setBackgroundColor(toggle ? Color.GREEN : Color.RED);
-                        tv.setText(toggle ? "信号正常 (GREEN)" : "正在投屏 (RED)");
-                        toggle = !toggle;
-                    }
-                });
-            }
-        }, 0, 1000); 
-    }
-
-    // ... 身份伪造与越狱 ...
-    private void stampIdentity(Object infoObj) {
-        if (infoObj == null) return;
+        
+        // 方案B: NaviService.onCreate (备用)
         try {
-            try { XposedHelpers.setObjectField(infoObj, "packageName", TARGET_PKG); } catch (Throwable t) {}
-            try { XposedHelpers.setObjectField(infoObj, "protocolVersion", "10"); } catch (Throwable t) {}
-            try {
-                Object baseModel = XposedHelpers.getObjectField(infoObj, "base");
-                if (baseModel != null) {
-                    XposedHelpers.setObjectField(baseModel, "packageName", TARGET_PKG);
-                    XposedHelpers.setObjectField(baseModel, "mapVendor", String.valueOf(currentVendor));
-                }
-            } catch (Throwable t) {}
-        } catch (Throwable t) {}
-    }
-
-    private void setupDynamicJailbreak(ClassLoader cl) {
-        try {
-            Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
-            if (wrapperClass != null) {
-                XposedHelpers.findAndHookMethod(wrapperClass, "a", new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        Object concreteConfig = param.getResult(); 
-                        if (concreteConfig != null) hookConcreteConfigClass(concreteConfig.getClass());
-                    }
-                });
-            }
-        } catch (Throwable t) {}
-    }
-
-    private void hookConcreteConfigClass(Class<?> realClass) {
-        String className = realClass.getName();
-        if (hookedConfigClasses.contains(className)) return; 
-        try {
-            XposedHelpers.findAndHookMethod(realClass, "b", new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(MethodHookParam param) {
-                    return currentVendor; 
-                }
-            });
-            hookedConfigClasses.add(className);
-            XposedBridge.log("NaviHook: 🔓 越狱成功: " + className);
-        } catch (Throwable t) {}
-    }
-
-    private void initLBSHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        try {
-            XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
+            XposedHelpers.findAndHookMethod("ecarx.naviservice.service.NaviService", lpparam.classLoader, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    Context context = (Context) param.thisObject;
-                    systemContext = context;
-                    mainHandler = new Handler(Looper.getMainLooper());
-                    registerReceiver(context);
-                    sendJavaBroadcast("STATUS_SERVICE_RUNNING");
-                    
-                    mainHandler.postDelayed(() -> {
-                        captureCoreObjects(lpparam.classLoader);
-                        initClusterDisplay(context); 
-                    }, 5000);
+                    Context ctx = (Context) param.thisObject;
+                    if (systemContext == null) {
+                        systemContext = ctx;
+                        mainHandler = new Handler(Looper.getMainLooper());
+                        XposedBridge.log("NaviHook: ✅ 通过 NaviService 拿到 Context");
+                        initEverything();
+                    }
                 }
             });
-        } catch (Throwable t) {}
-    }
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: Hook NaviService.onCreate 失败 (非致命): " + t);
+        }
 
-    private void hookNaviBaseModel(ClassLoader cl) {
+        // 4. 强制 MapVendor 为 0 (AMAP)
         try {
-            Class<?> baseModelClass = XposedHelpers.findClassIfExists(CLASS_NAVI_BASE_MODEL, cl);
-            if (baseModelClass != null) {
-                XposedHelpers.findAndHookMethod(baseModelClass, "getPackageName", new XC_MethodReplacement() {
-                    @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) { return TARGET_PKG; }
-                });
-                XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", new XC_MethodReplacement() {
-                    @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) { return currentVendor; }
-                });
-            }
-        } catch (Throwable t) {}
-    }
-
-    private void captureCoreObjects(ClassLoader cl) {
-        try {
-            try {
-                Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
-                if (wrapperClass != null) {
-                    Object config = XposedHelpers.callStaticMethod(wrapperClass, "a");
-                    if (config != null) hookConcreteConfigClass(config.getClass());
-                }
-            } catch (Throwable t) {}
-
-            mapGuideInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_GUIDE_INFO, cl);
-            mapStatusInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_STATUS_INFO, cl);
-            mapSwitchInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_SWITCH_INFO, cl);
-            
-            Class<?> mgrClass = XposedHelpers.findClass(CLASS_DASHBOARD_MGR, cl);
-            Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE);
-            instanceField.setAccessible(true);
-            dashboardManagerInstance = instanceField.get(null);
-            
-            if (dashboardManagerInstance != null) {
-                XposedBridge.log("NaviHook: 🎉 捕获成功!");
-                sendJavaBroadcast("STATUS_SERVICE_RUNNING");
-                sendJavaBroadcast("STATUS_IPC_CONNECTED");
-                performLifecycleHandshake();
+            Class<?> configClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG, lpparam.classLoader);
+            if (configClass != null) {
+                XposedHelpers.findAndHookMethod(configClass, "b", XC_MethodReplacement.returnConstant(0));
+                XposedBridge.log("NaviHook: 🔓 强制 Vendor=0 (高德) 成功");
             }
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: 捕获异常: " + t);
+             XposedBridge.log("NaviHook: Hook MapVendor 失败: " + t);
+        }
+
+        // 5. 拦截 bindService (核心劫持逻辑)
+        hookBindService(lpparam.classLoader);
+    }
+
+    private void initEverything() {
+        if (mainHandler == null) mainHandler = new Handler(Looper.getMainLooper());
+        
+        // 初始化伪造的Binder
+        initFakeBinder();
+        
+        // 注册广播接收器 (接收APP的开关指令)
+        if (!isReceiverRegistered && systemContext != null) {
+            try {
+                BroadcastReceiver receiver = new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context ctx, Intent intent) {
+                        String action = intent.getAction();
+                        XposedBridge.log("NaviHook: 收到广播 " + action);
+                        if ("XSF_ACTION_START_CAST".equals(action)) {
+                            sendJavaBroadcast("收到开启指令，执行操作...");
+                            createOverlayWindow();
+                        } else if ("XSF_ACTION_STOP_CAST".equals(action)) {
+                            destroyOverlayWindow();
+                        }
+                    }
+                };
+                IntentFilter filter = new IntentFilter();
+                filter.addAction("XSF_ACTION_START_CAST");
+                filter.addAction("XSF_ACTION_STOP_CAST");
+                systemContext.registerReceiver(receiver, filter);
+                isReceiverRegistered = true;
+                sendJavaBroadcast("✅ 服务端Hook成功，通信链路就绪");
+            } catch (Throwable t) {
+                XposedBridge.log("NaviHook: 注册广播失败: " + t);
+            }
         }
     }
 
-    private void registerReceiver(final Context context) {
+    // 🟢 核心：伪造 Binder，骗过系统的检查
+    private void initFakeBinder() {
+        if (fakeServiceBinder != null) return;
+        
+        fakeServiceBinder = new Binder() {
+            @Override
+            protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
+                // 打印所有交互，方便调试
+                // XposedBridge.log("NaviHook: Binder被调用 code=" + code);
+                
+                try {
+                    // 强制校验通过
+                    data.enforceInterface(TARGET_AIDL_INTERFACE);
+                    
+                    // 根据 7.5 smali 分析，setSurface 可能是第一个方法
+                    if (code == 1) { 
+                        XposedBridge.log("NaviHook: ⚡ 系统调用了 setSurface (code=1)");
+                        // 读取 Surface (Parcelable)
+                        if (data.readInt() != 0) {
+                            Surface surface = Surface.CREATOR.createFromParcel(data);
+                            int id = data.readInt();
+                            XposedBridge.log("NaviHook: 🎯 捕获到系统提供的 Surface: " + surface + " ID: " + id);
+                            sendJavaBroadcast("✅ 成功获取系统Surface! 通道打通!");
+                            
+                            // 这里我们其实不需要往这个 Surface 画东西，
+                            // 因为我们会用 TYPE_APPLICATION_OVERLAY 直接覆盖在上面。
+                            // 只要不报错，系统就会以为高德正常工作，从而保持 GUIDE 状态。
+                        }
+                    } else if (code == 4) { // w() isReady
+                         XposedBridge.log("NaviHook: 系统询问是否就绪 (isReady)");
+                         reply.writeNoException();
+                         reply.writeInt(1); // true
+                         return true;
+                    }
+                } catch (Throwable e) {
+                    // 忽略所有错误，防止崩溃
+                    // XposedBridge.log("NaviHook: Binder transact error: " + e);
+                }
+                
+                return true; // 永远返回成功，骗过系统
+            }
+        };
+        XposedBridge.log("NaviHook: 🎭 伪造 Binder 已创建");
+    }
+
+    // 🟢 核心：劫持 bindService
+    private void hookBindService(ClassLoader cl) {
         try {
-            BroadcastReceiver receiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context ctx, Intent intent) {
-                    try {
-                        String action = intent.getAction();
-                        if (AMAP_ACTION.equals(action)) {
-                            Bundle b = intent.getExtras();
-                            if (b != null) {
-                                extractData(b);
-                                if (isHookReady) updateClusterDirectly(); 
+            XposedHelpers.findAndHookMethod("android.content.ContextWrapper", cl, "bindService",
+                Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                Intent intent = (Intent) param.args[0];
+                ServiceConnection conn = (ServiceConnection) param.args[1];
+                
+                if (intent != null && intent.getComponent() != null) {
+                    String className = intent.getComponent().getClassName();
+                    String pkgName = intent.getComponent().getPackageName();
+                    
+                    // 判断是否是连接高德投屏服务
+                    if (className.contains("AutoSimilarWidgetViewService") || 
+                        (pkgName.equals(PKG_MAP) && className.contains("Widget"))) {
+                        
+                        XposedBridge.log("NaviHook: 🚨 拦截到高德连接请求: " + className);
+                        sendJavaBroadcast("⚡ 拦截连接 -> " + className);
+                        
+                        // 1. 阻止原方法执行
+                        param.setResult(true); 
+                        
+                        // 2. 手动触发连接成功回调，注入我们的 Fake Binder
+                        if (conn != null && fakeServiceBinder != null) {
+                            // 必须在主线程回调
+                            if (mainHandler != null) {
+                                mainHandler.post(() -> {
+                                    try {
+                                        ComponentName cn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
+                                        conn.onServiceConnected(cn, fakeServiceBinder);
+                                        XposedBridge.log("NaviHook: ✅ 手动回调 onServiceConnected 完成劫持");
+                                        sendJavaBroadcast("✅ 劫持成功: 虚拟服务已连接");
+                                    } catch (Throwable t) {
+                                        XposedBridge.log("NaviHook: 回调失败: " + t);
+                                    }
+                                });
                             }
                         }
-                        else if ("XSF_ACTION_SET_VENDOR".equals(action)) {
-                             currentVendor = 0; 
-                             sendJavaBroadcast("🔄 强制重连 -> V0");
-                             performLifecycleHandshake(); 
-                             if (systemContext != null) initClusterDisplay(systemContext);
-                        }
-                        else if ("XSF_ACTION_FORCE_CONNECT".equals(action)) {
-                            captureCoreObjects(context.getClassLoader());
-                            performLifecycleHandshake();
-                            if (systemContext != null) initClusterDisplay(systemContext);
-                        }
-                        else if ("XSF_ACTION_STOP".equals(action)) {
-                            stopProjection();
-                        }
-                    } catch (Throwable t) {}
+                    }
                 }
-            };
-            IntentFilter filter = new IntentFilter();
-            filter.addAction(AMAP_ACTION);
-            filter.addAction("XSF_ACTION_SET_VENDOR");
-            filter.addAction("XSF_ACTION_FORCE_CONNECT");
-            filter.addAction("XSF_ACTION_STOP");
-            context.registerReceiver(receiver, filter);
-        } catch (Throwable t) {}
+            }
+        });
+        } catch (Throwable t) {
+             XposedBridge.log("NaviHook: Hook bindService 失败: " + t);
+        }
     }
 
-    private void performLifecycleHandshake() {
-        if (dashboardManagerInstance == null || isHandshaking || mainHandler == null) return;
-        isHandshaking = true; 
-        isHookReady = false;
-        if (heartbeatTimer != null) { heartbeatTimer.cancel(); heartbeatTimer = null; }
-        mainHandler.postDelayed(() -> { if (isHandshaking) { isHandshaking = false; isHookReady = true; } }, 10000);
-        runHandshakeSequence();
-    }
-
-    private void runHandshakeSequence() {
-        final int STEP_DELAY = 200;
-        final int MODE_SWITCH_DELAY = 500;
+    // 🟢 核心：创建悬浮窗
+    private void createOverlayWindow() {
+        if (systemContext == null) return;
+        
         mainHandler.post(() -> {
             try {
-                injectSwitch(fakeOldVendor, currentVendor, SwitchState.CRUISE_TO_GUIDE);
-                sendJavaBroadcast("⚡ [0/7] 身份伪造切换: V5 -> V0");
-                mainHandler.postDelayed(() -> {
-                    injectStatus(Status.APP_START);
-                    sendJavaBroadcast("⚡ [1/7] APP启动(7)");
-                    mainHandler.postDelayed(() -> {
-                        injectStatus(Status.APP_START_FINISH);
-                        sendJavaBroadcast("⚡ [2/7] 启动完成(8)");
-                        mainHandler.postDelayed(() -> {
-                            injectStatus(Status.APP_ACTIVE);
-                            sendJavaBroadcast("⚡ [3/7] APP活跃(12)");
-                            mainHandler.postDelayed(() -> {
-                                injectStatus(Status.ROUTE_START);
-                                sendJavaBroadcast("⚡ [4/7] 路径计算(13)");
-                                mainHandler.postDelayed(() -> {
-                                    injectStatus(Status.ROUTE_SUCCESS);
-                                    sendJavaBroadcast("⚡ [5/7] 计算成功(14)");
-                                    mainHandler.postDelayed(() -> {
-                                        injectStatus(Status.GUIDE_START);
-                                        sendJavaBroadcast("⚡ [6/7] 导航开始(16) -> ✅");
-                                        startHeartbeat();
-                                        isHandshaking = false;
-                                        isHookReady = true;
-                                    }, STEP_DELAY);
-                                }, STEP_DELAY);
-                            }, STEP_DELAY);
-                        }, STEP_DELAY);
-                    }, STEP_DELAY);
-                }, MODE_SWITCH_DELAY);
+                if (clusterWindow != null) {
+                    clusterWindow.dismiss();
+                    clusterWindow = null;
+                }
+
+                DisplayManager dm = (DisplayManager) systemContext.getSystemService(Context.DISPLAY_SERVICE);
+                Display[] displays = dm.getDisplays();
+                Display targetDisplay = null;
+                
+                // 寻找副屏
+                for (Display d : displays) {
+                    XposedBridge.log("NaviHook: 发现屏幕 ID=" + d.getDisplayId() + " Name=" + d.getName());
+                    if (d.getDisplayId() != 0) { // 通常 0 是主屏
+                        targetDisplay = d;
+                        // 不 break，继续看，或者根据名字 "Cluster" 过滤
+                        // break; 
+                    }
+                }
+                
+                if (targetDisplay == null) {
+                    sendJavaBroadcast("❌ 未找到仪表屏幕!");
+                    return;
+                }
+                
+                XposedBridge.log("NaviHook: 🎯 将在屏幕 ID=" + targetDisplay.getDisplayId() + " 上创建窗口");
+
+                // 获取对应屏幕的 Context
+                Context displayContext = systemContext.createDisplayContext(targetDisplay);
+                
+                clusterWindow = new Presentation(displayContext, targetDisplay) {
+                    @Override
+                    protected void onCreate(Bundle savedInstanceState) {
+                        super.onCreate(savedInstanceState);
+                        
+                        // 这里是你可以自定义布局的地方
+                        // 暂时放一个最简单的TextView测试
+                        TextView tv = new TextView(getContext());
+                        tv.setText("V136 劫持成功\n高德地图 9.1");
+                        tv.setTextSize(40);
+                        tv.setTextColor(Color.WHITE);
+                        tv.setGravity(Gravity.CENTER);
+                        tv.setBackgroundColor(Color.parseColor("#000000")); // 纯黑背景
+                        
+                        setContentView(tv);
+                    }
+                };
+
+                // 设置为系统悬浮窗类型
+                clusterWindow.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                
+                // 关键 Flags
+                clusterWindow.getWindow().addFlags(
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | 
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | 
+                    WindowManager.LayoutParams.FLAG_FULLSCREEN | 
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                );
+
+                clusterWindow.show();
+                
+                sendJavaBroadcast("✅ 投屏窗口已创建 (Type:2038)");
+                
             } catch (Throwable t) {
-                isHandshaking = false;
-                sendJavaBroadcast("❌ 握手异常: " + t.getMessage());
+                XposedBridge.log("NaviHook: 窗口创建失败: " + t);
+                sendJavaBroadcast("❌ 窗口失败: " + t.getMessage());
             }
         });
     }
 
-    private void startHeartbeat() {
-        if (heartbeatTimer != null) heartbeatTimer.cancel();
-        heartbeatTimer = new Timer();
-        segmentDis = 888;
-        heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-                if (dashboardManagerInstance == null) return;
-                mainHandler.post(() -> { if (isHookReady) updateClusterDirectly(); });
-            }
-        }, 0, 2000); 
+    private void destroyOverlayWindow() {
+        mainHandler.post(() -> {
+            try {
+                if (clusterWindow != null) {
+                    clusterWindow.dismiss();
+                    clusterWindow = null;
+                    sendJavaBroadcast("🛑 投屏已关闭");
+                }
+            } catch (Throwable t) {}
+        });
     }
 
-    private void stopProjection() {
-        if (heartbeatTimer != null) { heartbeatTimer.cancel(); heartbeatTimer = null; }
-        if (dashboardManagerInstance == null || mainHandler == null) return;
-        try {
-            clearClusterData();
-            if (clusterPresentation != null) { clusterPresentation.dismiss(); clusterPresentation = null; }
-            if (flashTimer != null) { flashTimer.cancel(); flashTimer = null; }
-            mainHandler.postDelayed(() -> {
-                injectStatus(Status.GUIDE_STOP);
-                sendJavaBroadcast("🛑 导航已停止");
-                mainHandler.postDelayed(() -> {
-                    injectSwitch(currentVendor, fakeOldVendor, SwitchState.GUIDE_TO_CRUISE);
-                    sendJavaBroadcast("🛑 切回巡航");
-                    mainHandler.postDelayed(() -> {
-                        injectStatus(Status.APP_FINISH);
-                        isHookReady = false;
-                        sendJavaBroadcast("🛑 应用退出 -> 📴");
-                    }, 300);
-                }, 300);
-            }, 100);
-        } catch (Throwable t) {}
-    }
-
-    private void injectSwitch(int oldV, int newV, int state) {
-        try {
-            Object switchInfo = XposedHelpers.newInstance(mapSwitchInfoClass, oldV, newV);
-            XposedHelpers.setIntField(switchInfo, "mSwitchState", state);
-            stampIdentity(switchInfo); 
-            XposedHelpers.callMethod(dashboardManagerInstance, "a", switchInfo);
-        } catch (Throwable t) {}
-    }
-
-    private void injectStatus(int status) {
-        try {
-            Object statusInfo = XposedHelpers.newInstance(mapStatusInfoClass, currentVendor);
-            XposedHelpers.setIntField(statusInfo, "status", status);
-            stampIdentity(statusInfo); 
-            XposedHelpers.callMethod(dashboardManagerInstance, "a", statusInfo);
-        } catch (Throwable t) {}
-    }
-
-    private void updateClusterDirectly() {
-        try {
-            Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
-            XposedHelpers.setObjectField(guideInfo, "curRoadName", curRoadName); 
-            XposedHelpers.setObjectField(guideInfo, "nextRoadName", nextRoadName);
-            XposedHelpers.setIntField(guideInfo, "turnId", turnIcon); 
-            XposedHelpers.setIntField(guideInfo, "nextTurnDistance", segmentDis);
-            XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
-            XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
-            
-            // MAP MODE
-            XposedHelpers.setIntField(guideInfo, "guideType", 0); 
-            try { XposedHelpers.setIntField(guideInfo, "roadType", -1); } catch (Throwable t) {} 
-            
-            try { XposedHelpers.setIntField(guideInfo, "cameraDistance", 0); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "cameraSpeed", 0); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "cameraType", 0); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "sapaType", 0); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "sapaDistance", 0); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "trafficLightIcon", 0); } catch (Throwable t) {}
-            try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
-            
-            stampIdentity(guideInfo);
-            XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V131: [V0][MapMode:0][TryingWins]");
-        } catch (Throwable t) {
-            sendJavaBroadcast("❌ 注入失败: " + t.getMessage());
-        }
-    }
-    
-    private void clearClusterData() {
-        try {
-            Object guideInfo = XposedHelpers.newInstance(mapGuideInfoClass, currentVendor);
-            XposedHelpers.setObjectField(guideInfo, "curRoadName", "");
-            XposedHelpers.setObjectField(guideInfo, "nextRoadName", "");
-            XposedHelpers.setIntField(guideInfo, "turnId", 0);
-            XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 0);
-            XposedHelpers.setIntField(guideInfo, "guideType", 0);
-            stampIdentity(guideInfo);
-            XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-        } catch (Throwable t) {}
-    }
-    
     private void sendJavaBroadcast(String log) {
         if (systemContext == null) return;
         new Thread(() -> {
             try {
                 Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
-                i.setPackage(PKG_SELF); 
+                i.setPackage(PKG_SELF);
                 i.putExtra("log", log);
                 i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-                i.addFlags(Intent.FLAG_RECEIVER_FOREGROUND); 
+                // i.addFlags(Intent.FLAG_RECEIVER_FOREGROUND); // 部分系统需要
+                
                 try {
                     Object userAll = XposedHelpers.getStaticObjectField(UserHandle.class, "ALL");
                     Method method = Context.class.getMethod("sendBroadcastAsUser", Intent.class, UserHandle.class);
@@ -532,24 +348,5 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             } catch (Throwable t) {}
         }).start();
-    }
-    
-    private void extractData(Bundle b) {
-        try {
-            if (b.containsKey("CUR_ROAD_NAME")) curRoadName = b.getString("CUR_ROAD_NAME");
-            if (b.containsKey("NEXT_ROAD_NAME")) nextRoadName = b.getString("NEXT_ROAD_NAME");
-            segmentDis = getInt(b, "SEG_REMAIN_DIS", "seg_remain_dis");
-            turnIcon = getInt(b, "ICON", "icon");
-            if (turnIcon == 0 && b.containsKey("NAV_ICON")) turnIcon = b.getInt("NAV_ICON");
-            routeRemainDis = getInt(b, "ROUTE_REMAIN_DIS", "route_remain_dis");
-            routeRemainTime = getInt(b, "ROUTE_REMAIN_TIME", "route_remain_time");
-            if (curRoadName == null) curRoadName = "当前道路";
-        } catch (Exception e) {}
-    }
-    
-    private int getInt(Bundle b, String k1, String k2) {
-        int v = b.getInt(k1, -1);
-        if (v == -1) v = b.getInt(k2, -1);
-        return (v == -1) ? 0 : v;
     }
 }
