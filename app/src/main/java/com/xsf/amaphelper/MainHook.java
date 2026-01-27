@@ -16,8 +16,8 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.WindowManager;
 import android.widget.TextView;
-import java.lang.reflect.Field;  // 🟢 补全了！
-import java.lang.reflect.Method; // 🟢 补全了！
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Timer;
@@ -62,7 +62,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static String curRoadName = "等待数据";
-    private static String nextRoadName = "V130-Final";
+    private static String nextRoadName = "V131窗口适配";
     private static int turnIcon = 2; 
     private static int segmentDis = 888;
     private static int routeRemainDis = 2000;
@@ -94,7 +94,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V130-Final 地图模式修正版启动");
+        XposedBridge.log("NaviHook: 🚀 V131 万能窗口适配版启动");
         
         initLBSHook(lpparam);
         setupDynamicJailbreak(lpparam.classLoader);
@@ -126,46 +126,73 @@ public class MainHook implements IXposedHookLoadPackage {
             try {
                 if (clusterPresentation != null) {
                     clusterPresentation.dismiss();
+                    clusterPresentation = null;
                 }
                 
-                clusterPresentation = new Presentation(context, display) {
-                    @Override
-                    protected void onCreate(Bundle savedInstanceState) {
-                        super.onCreate(savedInstanceState);
+                // 🟢 关键修正：使用 createDisplayContext 获取正确的 Display Context
+                Context displayContext = context.createDisplayContext(display);
+                
+                // 窗口类型试错列表
+                // 2038: APPLICATION_OVERLAY (Android 8.0+ 标准)
+                // 2003: SYSTEM_ALERT (旧版标准)
+                // 2006: SYSTEM_OVERLAY (系统级，不可点击)
+                // 2002: TYPE_PHONE (极旧版)
+                // 2005: TOAST (有些系统不校验权限)
+                int[] windowTypes = {2038, 2003, 2006, 2002, 2005};
+                
+                boolean success = false;
+                
+                for (int type : windowTypes) {
+                    try {
+                        XposedBridge.log("NaviHook: 🔄 尝试窗口类型: " + type);
                         
-                        TextView tv = new TextView(getContext());
-                        tv.setText("V130 投屏测试\nMap Mode(0)");
-                        tv.setTextColor(Color.WHITE);
-                        tv.setTextSize(40);
-                        tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.BLUE); 
+                        clusterPresentation = new Presentation(displayContext, display) {
+                            @Override
+                            protected void onCreate(Bundle savedInstanceState) {
+                                super.onCreate(savedInstanceState);
+                                TextView tv = new TextView(getContext());
+                                tv.setText("V131 成功!\nType: " + type);
+                                tv.setTextColor(Color.WHITE);
+                                tv.setTextSize(40);
+                                tv.setGravity(Gravity.CENTER);
+                                tv.setBackgroundColor(Color.BLUE); 
+                                setContentView(tv);
+                                startFlashing(tv);
+                            }
+                        };
                         
-                        setContentView(tv);
-                        startFlashing(tv);
+                        // 设置窗口参数
+                        clusterPresentation.getWindow().setType(type);
+                        clusterPresentation.getWindow().addFlags(
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
+                            WindowManager.LayoutParams.FLAG_FULLSCREEN |
+                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                        );
+                        
+                        clusterPresentation.show();
+                        
+                        XposedBridge.log("NaviHook: ✅ 窗口创建成功! 类型: " + type);
+                        sendJavaBroadcast("✅ 投屏成功! 类型: " + type);
+                        success = true;
+                        break; // 成功则退出循环
+                        
+                    } catch (Throwable t) {
+                        XposedBridge.log("NaviHook: ⚠️ 类型 " + type + " 失败: " + t.getMessage());
+                        if (clusterPresentation != null) {
+                            try { clusterPresentation.dismiss(); } catch (Throwable e) {}
+                            clusterPresentation = null;
+                        }
                     }
-                };
-                
-                try {
-                    clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_PRIVATE_PRESENTATION);
-                } catch (Exception e) {
-                    clusterPresentation.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
                 }
                 
-                clusterPresentation.getWindow().addFlags(
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
-                    WindowManager.LayoutParams.FLAG_FULLSCREEN |
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                );
-                
-                clusterPresentation.show();
-                XposedBridge.log("NaviHook: ✅ 副屏画面已投射");
-                sendJavaBroadcast("✅ 视频通道已打通!");
+                if (!success) {
+                    sendJavaBroadcast("❌ 所有窗口类型均失败，请检查系统权限");
+                }
                 
             } catch (Throwable t) {
-                XposedBridge.log("NaviHook: ❌ 投屏创建失败: " + t);
-                sendJavaBroadcast("❌ 投屏失败: " + t);
+                XposedBridge.log("NaviHook: ❌ 投屏逻辑致命错误: " + t);
             }
         });
     }
@@ -188,6 +215,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 0, 1000); 
     }
 
+    // ... 身份伪造与越狱 ...
     private void stampIdentity(Object infoObj) {
         if (infoObj == null) return;
         try {
@@ -284,7 +312,7 @@ public class MainHook implements IXposedHookLoadPackage {
             mapSwitchInfoClass = XposedHelpers.findClassIfExists(CLASS_MAP_SWITCH_INFO, cl);
             
             Class<?> mgrClass = XposedHelpers.findClass(CLASS_DASHBOARD_MGR, cl);
-            Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE); // 这里需要 Field 类
+            Field instanceField = XposedHelpers.findField(mgrClass, FIELD_INSTANCE);
             instanceField.setAccessible(true);
             dashboardManagerInstance = instanceField.get(null);
             
@@ -453,7 +481,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedHelpers.setIntField(guideInfo, "remainDistance", routeRemainDis);
             XposedHelpers.setIntField(guideInfo, "remainTime", routeRemainTime);
             
-            // 🟢 核心修正：Map Mode = 0 (不是 TBT 的 1)
+            // MAP MODE
             XposedHelpers.setIntField(guideInfo, "guideType", 0); 
             try { XposedHelpers.setIntField(guideInfo, "roadType", -1); } catch (Throwable t) {} 
             
@@ -467,7 +495,7 @@ public class MainHook implements IXposedHookLoadPackage {
             
             stampIdentity(guideInfo);
             XposedHelpers.callMethod(dashboardManagerInstance, "a", guideInfo);
-            sendJavaBroadcast("💉 V130: [V0][MapMode:0][GreenScreen]");
+            sendJavaBroadcast("💉 V131: [V0][MapMode:0][TryingWins]");
         } catch (Throwable t) {
             sendJavaBroadcast("❌ 注入失败: " + t.getMessage());
         }
