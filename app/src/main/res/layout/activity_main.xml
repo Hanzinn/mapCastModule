@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#000000"
-    android:padding="10dp">
+    android:padding="12dp">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -28,7 +28,17 @@
             android:layout_width="0dp" 
             android:layout_height="wrap_content" 
             android:layout_weight="1" 
-            android:text="Hook: 等待" 
+            android:text="服务Hook: 等待" 
+            android:textColor="#FFFF00" 
+            android:gravity="center" 
+            android:textStyle="bold"/>
+            
+        <TextView 
+            android:id="@+id/tv_status_ipc" 
+            android:layout_width="0dp" 
+            android:layout_height="wrap_content" 
+            android:layout_weight="1" 
+            android:text="链路IPC: 断开" 
             android:textColor="#FFFF00" 
             android:gravity="center" 
             android:textStyle="bold"/>
@@ -43,7 +53,7 @@
         <Button 
             android:id="@+id/btn_start" 
             android:layout_width="0dp" 
-            android:layout_height="70dp" 
+            android:layout_height="65dp" 
             android:layout_weight="1"
             android:text="开启投屏" 
             android:textSize="18sp"
@@ -55,7 +65,7 @@
         <Button 
             android:id="@+id/btn_stop" 
             android:layout_width="0dp" 
-            android:layout_height="70dp" 
+            android:layout_height="65dp" 
             android:layout_weight="1"
             android:text="关闭投屏" 
             android:textSize="18sp"
@@ -68,7 +78,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="运行日志 (自动滚动):"
+        android:text="实时运行日志:"
         android:textColor="#888888"
         android:textSize="12sp"/>
 
@@ -87,7 +97,7 @@
             android:textColor="#00FF00" 
             android:textSize="11sp" 
             android:fontFamily="monospace" 
-            android:text="V136 准备就绪..." />
+            android:text="等待操作..." />
     </ScrollView>
     
     <LinearLayout 
@@ -110,7 +120,7 @@
             android:layout_width="0dp" 
             android:layout_height="50dp" 
             android:layout_weight="1"
-            android:text="清除退出" 
+            android:text="退出APP" 
             android:textColor="#FFFFFF"
             android:backgroundTint="#616161"
             android:layout_marginStart="5dp"/>
