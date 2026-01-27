@@ -1,6 +1,7 @@
 package com.xsf.amaphelper;
 
 import android.util.Log;
+import java.lang.reflect.Field;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -14,53 +15,59 @@ public class MainHook implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviSpy: 🚀 V123 源头阻击版启动 - 正在监听对象创建...");
+        XposedBridge.log("NaviSpy: 🚀 V124 全息透视版启动");
 
-        // 1. 监控 MapSwitchingInfo 的构造函数 (II)V
-        // 这是寻找切换指令参数（Vendor vs Mode）的终极铁证
-        try {
-            XposedHelpers.findAndHookConstructor(
-                "ecarx.naviservice.map.entity.MapSwitchingInfo", 
-                lpparam.classLoader, 
-                int.class, // 参数1: oldVendor?
-                int.class, // 参数2: newVendor?
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        int arg1 = (int) param.args[0];
-                        int arg2 = (int) param.args[1];
-                        
-                        XposedBridge.log("NaviSpy: 🚨 发现 SwitchingInfo 创建! 参数: [" + arg1 + ", " + arg2 + "]");
-                        
-                        // 🔥 打印调用栈：这是找到“VIP密道”的关键！
-                        XposedBridge.log("NaviSpy: 🕵️‍♂️ 谁在调用我？\n" + Log.getStackTraceString(new Throwable()));
-                    }
-                }
-            );
-        } catch (Throwable t) {
-            XposedBridge.log("NaviSpy: ❌ 监控 SwitchingInfo 失败: " + t);
-        }
-
-        // 2. 监控 MapGuideInfo 的构造函数 (I)V
-        // 这是寻找正确 Vendor ID 的关键
+        // 🟢 重点监控 MapGuideInfo (Vendor=0 的那个对象)
         try {
             XposedHelpers.findAndHookConstructor(
                 "ecarx.naviservice.map.entity.MapGuideInfo", 
                 lpparam.classLoader, 
-                int.class, // 参数: vendor
+                int.class, 
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         int vendor = (int) param.args[0];
-                        XposedBridge.log("NaviSpy: 📦 发现 GuideInfo 创建! Vendor=" + vendor);
+                        Object guideInfo = param.thisObject;
                         
-                        // 我们不需要每次都打印栈，只打一次就行，避免日志爆炸
-                        // XposedBridge.log("NaviSpy: 调用栈...\n" + Log.getStackTraceString(new Throwable()));
+                        // 只看 Vendor=0 的（官方数据）
+                        if (vendor == 0) {
+                            XposedBridge.log("NaviSpy: 📦 [捕获] MapGuideInfo(V0)");
+                            
+                            // 1. 打印所有字段值 (抄作业的标准答案)
+                            String fields = dumpFields(guideInfo);
+                            XposedBridge.log("NaviSpy: 📝 字段详情 -> " + fields);
+                            
+                            // 2. 打印调用栈 (找到 VIP 密道入口)
+                            // 加上这个，我们就能知道是哪个类在发数据！
+                            XposedBridge.log("NaviSpy: 🔗 调用来源 -> \n" + Log.getStackTraceString(new Throwable()));
+                        }
                     }
                 }
             );
         } catch (Throwable t) {
             XposedBridge.log("NaviSpy: ❌ 监控 GuideInfo 失败: " + t);
         }
+    }
+
+    // 反射遍历所有字段
+    private String dumpFields(Object obj) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            Class<?> clazz = obj.getClass();
+            // 遍历当前类及父类的字段
+            while (clazz != null) {
+                Field[] fields = clazz.getDeclaredFields();
+                for (Field f : fields) {
+                    f.setAccessible(true);
+                    String name = f.getName();
+                    Object value = f.get(obj);
+                    sb.append(name).append("=").append(value).append("; ");
+                }
+                clazz = clazz.getSuperclass(); // 继续查父类
+            }
+        } catch (Exception e) {
+            sb.append("解析异常");
+        }
+        return sb.toString();
     }
 }
