@@ -3,11 +3,11 @@ package com.xsf.amaphelper;
 import android.app.Application;
 import android.app.Presentation;
 import android.app.Service;
-import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.BroadcastReceiver;
 import android.content.ServiceConnection;
 import android.graphics.Color;
 import android.hardware.display.DisplayManager;
@@ -24,7 +24,6 @@ import android.view.Gravity;
 import android.view.Surface;
 import android.view.WindowManager;
 import android.widget.TextView;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -34,17 +33,15 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
-    // 目标包名
     private static final String PKG_SERVICE = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
-    private static final String PKG_MAP = "com.autonavi.amapauto";
+    
+    // 目标特征字符串，用于识别高德服务连接
+    private static final String TARGET_SERVICE_KEYWORD = "AutoSimilarWidgetViewService";
+    
+    // 伪造的 Service 类名 (必须和 AndroidManifest 里一致)
+    private static final String FAKE_SERVICE_CLASS = "com.xsf.amaphelper.FakeNaviService";
 
-    // 关键类名 (根据你上传的 smali 确认)
-    private static final String CLASS_MAP_CONFIG = "ecarx.naviservice.map.ce"; 
-    private static final String TARGET_AIDL_INTERFACE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
-    private static final String TARGET_SERVICE_IMPL = "com.autosimilarwidget.view.AutoSimilarWidgetViewService";
-
-    // 全局变量
     private static Context systemContext = null;
     private static Handler mainHandler = null;
     private static Presentation clusterWindow = null;
@@ -53,81 +50,63 @@ public class MainHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        // 1. 激活模块自身UI显示状态
+        // 1. 激活模块自身UI
         if (lpparam.packageName.equals(PKG_SELF)) {
             XposedHelpers.findAndHookMethod(PKG_SELF + ".MainActivity", lpparam.classLoader, "isModuleActive", XC_MethodReplacement.returnConstant(true));
             return;
         }
 
-        // 2. 只 Hook 导航服务
+        // 2. 只注入导航服务进程
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V136 启动 - 注入进程: " + lpparam.processName);
+        XposedBridge.log("NaviHook: 🚀 V136 注入成功 (PID: " + android.os.Process.myPid() + ")");
 
-        // 3. 获取 System Context (双重保险)
-        // 方案A: Application.onCreate
-        XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
+        // 3. 获取 Context (双重保险)
+        XC_MethodHook contextHook = new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 Context ctx = (Context) param.thisObject;
                 if (systemContext == null) {
                     systemContext = ctx;
                     mainHandler = new Handler(Looper.getMainLooper());
-                    XposedBridge.log("NaviHook: ✅ 通过 Application 拿到 Context");
+                    XposedBridge.log("NaviHook: Context 获取成功!");
                     initEverything();
                 }
             }
-        });
-        
-        // 方案B: NaviService.onCreate (备用)
+        };
+        XposedHelpers.findAndHookMethod(Application.class, "onCreate", contextHook);
         try {
-            XposedHelpers.findAndHookMethod("ecarx.naviservice.service.NaviService", lpparam.classLoader, "onCreate", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    Context ctx = (Context) param.thisObject;
-                    if (systemContext == null) {
-                        systemContext = ctx;
-                        mainHandler = new Handler(Looper.getMainLooper());
-                        XposedBridge.log("NaviHook: ✅ 通过 NaviService 拿到 Context");
-                        initEverything();
-                    }
-                }
-            });
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Hook NaviService.onCreate 失败 (非致命): " + t);
-        }
+            XposedHelpers.findAndHookMethod("ecarx.naviservice.service.NaviService", lpparam.classLoader, "onCreate", contextHook);
+        } catch (Throwable t) {}
 
-        // 4. 强制 MapVendor 为 0 (AMAP)
+        // 4. 强制识别为高德 (Vendor = 0)
         try {
-            Class<?> configClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG, lpparam.classLoader);
+            // 根据之前的分析，ecarx.naviservice.map.ce 似乎是 MapConfigWrapper
+            Class<?> configClass = XposedHelpers.findClassIfExists("ecarx.naviservice.map.ce", lpparam.classLoader);
             if (configClass != null) {
+                // 假设 b() 方法返回 mapVendor
                 XposedHelpers.findAndHookMethod(configClass, "b", XC_MethodReplacement.returnConstant(0));
-                XposedBridge.log("NaviHook: 🔓 强制 Vendor=0 (高德) 成功");
+                XposedBridge.log("NaviHook: 🔓 强制 Vendor=0 (AMAP) 成功");
             }
         } catch (Throwable t) {
-             XposedBridge.log("NaviHook: Hook MapVendor 失败: " + t);
+            XposedBridge.log("NaviHook: Vendor Hook Error: " + t);
         }
 
-        // 5. 拦截 bindService (核心劫持逻辑)
+        // 5. 核心：劫持 bindService
         hookBindService(lpparam.classLoader);
     }
 
     private void initEverything() {
-        if (mainHandler == null) mainHandler = new Handler(Looper.getMainLooper());
+        if (fakeServiceBinder == null) createFakeBinder();
         
-        // 初始化伪造的Binder
-        initFakeBinder();
-        
-        // 注册广播接收器 (接收APP的开关指令)
         if (!isReceiverRegistered && systemContext != null) {
             try {
                 BroadcastReceiver receiver = new BroadcastReceiver() {
                     @Override
                     public void onReceive(Context ctx, Intent intent) {
                         String action = intent.getAction();
-                        XposedBridge.log("NaviHook: 收到广播 " + action);
                         if ("XSF_ACTION_START_CAST".equals(action)) {
-                            sendJavaBroadcast("收到开启指令，执行操作...");
+                            sendJavaBroadcast("收到开启指令...");
                             createOverlayWindow();
                         } else if ("XSF_ACTION_STOP_CAST".equals(action)) {
                             destroyOverlayWindow();
@@ -139,59 +118,43 @@ public class MainHook implements IXposedHookLoadPackage {
                 filter.addAction("XSF_ACTION_STOP_CAST");
                 systemContext.registerReceiver(receiver, filter);
                 isReceiverRegistered = true;
-                sendJavaBroadcast("✅ 服务端Hook成功，通信链路就绪");
+                sendJavaBroadcast("✅ 模块就绪，Context已获取");
             } catch (Throwable t) {
-                XposedBridge.log("NaviHook: 注册广播失败: " + t);
+                XposedBridge.log("NaviHook: Receiver Error: " + t);
             }
         }
     }
 
-    // 🟢 核心：伪造 Binder，骗过系统的检查
-    private void initFakeBinder() {
-        if (fakeServiceBinder != null) return;
-        
+    // 🟢 创建伪造的 Binder (模拟高德服务端)
+    private void createFakeBinder() {
         fakeServiceBinder = new Binder() {
             @Override
             protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
-                // 打印所有交互，方便调试
-                // XposedBridge.log("NaviHook: Binder被调用 code=" + code);
-                
+                // 只要系统调这个 Binder，我们就认为连接通了
                 try {
-                    // 强制校验通过
-                    data.enforceInterface(TARGET_AIDL_INTERFACE);
+                    // data.enforceInterface("com.autosimilarwidget.view.IAutoSimilarWidgetViewService");
+                    // 即使 Interface Token 不对，我们也尽量不抛异常
                     
-                    // 根据 7.5 smali 分析，setSurface 可能是第一个方法
-                    if (code == 1) { 
-                        XposedBridge.log("NaviHook: ⚡ 系统调用了 setSurface (code=1)");
-                        // 读取 Surface (Parcelable)
-                        if (data.readInt() != 0) {
-                            Surface surface = Surface.CREATOR.createFromParcel(data);
-                            int id = data.readInt();
-                            XposedBridge.log("NaviHook: 🎯 捕获到系统提供的 Surface: " + surface + " ID: " + id);
-                            sendJavaBroadcast("✅ 成功获取系统Surface! 通道打通!");
-                            
-                            // 这里我们其实不需要往这个 Surface 画东西，
-                            // 因为我们会用 TYPE_APPLICATION_OVERLAY 直接覆盖在上面。
-                            // 只要不报错，系统就会以为高德正常工作，从而保持 GUIDE 状态。
-                        }
-                    } else if (code == 4) { // w() isReady
-                         XposedBridge.log("NaviHook: 系统询问是否就绪 (isReady)");
-                         reply.writeNoException();
-                         reply.writeInt(1); // true
-                         return true;
+                    if (code == 1) { // setSurface
+                        XposedBridge.log("NaviHook: ⚡ 系统调用 setSurface (code=1)");
+                        sendJavaBroadcast("⚡ 链路IPC: 系统请求设置 Surface");
+                        // 这里我们不需要真的拿 Surface，因为我们是用悬浮窗覆盖
+                    } else if (code == 4) { // isReady
+                        XposedBridge.log("NaviHook: ⚡ 系统调用 isReady (code=4)");
+                        reply.writeNoException();
+                        reply.writeInt(1); // true
+                        return true;
                     }
                 } catch (Throwable e) {
-                    // 忽略所有错误，防止崩溃
-                    // XposedBridge.log("NaviHook: Binder transact error: " + e);
+                    XposedBridge.log("NaviHook: Binder Transact Ignored: " + e);
                 }
-                
-                return true; // 永远返回成功，骗过系统
+                return true; // 永远返回成功
             }
         };
-        XposedBridge.log("NaviHook: 🎭 伪造 Binder 已创建");
+        sendJavaBroadcast("🛠️ 虚拟Binder已创建");
     }
 
-    // 🟢 核心：劫持 bindService
+    // 🟢 拦截 bindService
     private void hookBindService(ClassLoader cl) {
         try {
             XposedHelpers.findAndHookMethod("android.content.ContextWrapper", cl, "bindService",
@@ -201,46 +164,47 @@ public class MainHook implements IXposedHookLoadPackage {
                 Intent intent = (Intent) param.args[0];
                 ServiceConnection conn = (ServiceConnection) param.args[1];
                 
-                if (intent != null && intent.getComponent() != null) {
-                    String className = intent.getComponent().getClassName();
-                    String pkgName = intent.getComponent().getPackageName();
+                if (intent == null || intent.getComponent() == null) return;
+                
+                String className = intent.getComponent().getClassName();
+                
+                // 只要是连高德投屏服务的，一律拦截
+                if (className.contains(TARGET_SERVICE_KEYWORD)) {
+                    XposedBridge.log("NaviHook: 🚨 拦截到连接请求 -> " + className);
+                    sendJavaBroadcast("🚨 拦截到高德连接请求!");
                     
-                    // 判断是否是连接高德投屏服务
-                    if (className.contains("AutoSimilarWidgetViewService") || 
-                        (pkgName.equals(PKG_MAP) && className.contains("Widget"))) {
-                        
-                        XposedBridge.log("NaviHook: 🚨 拦截到高德连接请求: " + className);
-                        sendJavaBroadcast("⚡ 拦截连接 -> " + className);
-                        
-                        // 1. 阻止原方法执行
-                        param.setResult(true); 
-                        
-                        // 2. 手动触发连接成功回调，注入我们的 Fake Binder
-                        if (conn != null && fakeServiceBinder != null) {
-                            // 必须在主线程回调
-                            if (mainHandler != null) {
-                                mainHandler.post(() -> {
-                                    try {
-                                        ComponentName cn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
-                                        conn.onServiceConnected(cn, fakeServiceBinder);
-                                        XposedBridge.log("NaviHook: ✅ 手动回调 onServiceConnected 完成劫持");
-                                        sendJavaBroadcast("✅ 劫持成功: 虚拟服务已连接");
-                                    } catch (Throwable t) {
-                                        XposedBridge.log("NaviHook: 回调失败: " + t);
-                                    }
-                                });
-                            }
+                    // 1. 阻止原方法
+                    param.setResult(true); 
+                    
+                    // 2. 只有初始化好了才能回调
+                    if (fakeServiceBinder != null && conn != null) {
+                        // 在主线程回调 onServiceConnected
+                        if (mainHandler != null) {
+                            mainHandler.post(() -> {
+                                try {
+                                    // 伪造一个 ComponentName，让 ServiceConnection 以为连上了高德
+                                    ComponentName cn = new ComponentName("com.autonavi.amapauto", className);
+                                    conn.onServiceConnected(cn, fakeServiceBinder);
+                                    
+                                    XposedBridge.log("NaviHook: ✅ 已手动回调 onServiceConnected");
+                                    sendJavaBroadcast("✅ 劫持成功: 已注入虚拟服务");
+                                } catch (Throwable t) {
+                                    XposedBridge.log("NaviHook: 回调失败: " + t);
+                                }
+                            });
                         }
+                    } else {
+                        XposedBridge.log("NaviHook: ❌ 拦截成功但 Binder 未就绪");
                     }
                 }
             }
         });
         } catch (Throwable t) {
-             XposedBridge.log("NaviHook: Hook bindService 失败: " + t);
+            XposedBridge.log("NaviHook: Hook bindService 失败: " + t);
         }
     }
 
-    // 🟢 核心：创建悬浮窗
+    // 🟢 创建副屏悬浮窗
     private void createOverlayWindow() {
         if (systemContext == null) return;
         
@@ -255,77 +219,65 @@ public class MainHook implements IXposedHookLoadPackage {
                 Display[] displays = dm.getDisplays();
                 Display targetDisplay = null;
                 
-                // 寻找副屏
                 for (Display d : displays) {
-                    XposedBridge.log("NaviHook: 发现屏幕 ID=" + d.getDisplayId() + " Name=" + d.getName());
-                    if (d.getDisplayId() != 0) { // 通常 0 是主屏
+                    // 排除主屏(0)，找副屏
+                    if (d.getDisplayId() != 0) {
                         targetDisplay = d;
-                        // 不 break，继续看，或者根据名字 "Cluster" 过滤
-                        // break; 
+                        XposedBridge.log("NaviHook: 🎯 找到目标屏幕 ID=" + d.getDisplayId());
+                        break;
                     }
                 }
                 
                 if (targetDisplay == null) {
-                    sendJavaBroadcast("❌ 未找到仪表屏幕!");
+                    sendJavaBroadcast("❌ 错误: 未找到仪表屏幕!");
                     return;
                 }
-                
-                XposedBridge.log("NaviHook: 🎯 将在屏幕 ID=" + targetDisplay.getDisplayId() + " 上创建窗口");
 
-                // 获取对应屏幕的 Context
                 Context displayContext = systemContext.createDisplayContext(targetDisplay);
                 
                 clusterWindow = new Presentation(displayContext, targetDisplay) {
                     @Override
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
-                        
-                        // 这里是你可以自定义布局的地方
-                        // 暂时放一个最简单的TextView测试
                         TextView tv = new TextView(getContext());
-                        tv.setText("V136 劫持成功\n高德地图 9.1");
-                        tv.setTextSize(40);
+                        tv.setText("V136 悬浮窗测试\nIPC链路正常");
                         tv.setTextColor(Color.WHITE);
+                        tv.setTextSize(40);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.parseColor("#000000")); // 纯黑背景
-                        
+                        tv.setBackgroundColor(Color.BLUE); // 蓝色背景方便识别
                         setContentView(tv);
                     }
                 };
 
-                // 设置为系统悬浮窗类型
+                // 2038 = TYPE_APPLICATION_OVERLAY
                 clusterWindow.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
-                
-                // 关键 Flags
                 clusterWindow.getWindow().addFlags(
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | 
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | 
                     WindowManager.LayoutParams.FLAG_FULLSCREEN | 
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                 );
-
-                clusterWindow.show();
                 
-                sendJavaBroadcast("✅ 投屏窗口已创建 (Type:2038)");
+                clusterWindow.show();
+                sendJavaBroadcast("✅ 投屏窗口已创建 (Type 2038)");
                 
             } catch (Throwable t) {
-                XposedBridge.log("NaviHook: 窗口创建失败: " + t);
-                sendJavaBroadcast("❌ 窗口失败: " + t.getMessage());
+                sendJavaBroadcast("❌ 窗口创建失败: " + t.getMessage());
+                XposedBridge.log(t);
             }
         });
     }
 
     private void destroyOverlayWindow() {
         mainHandler.post(() -> {
-            try {
-                if (clusterWindow != null) {
+            if (clusterWindow != null) {
+                try {
                     clusterWindow.dismiss();
                     clusterWindow = null;
                     sendJavaBroadcast("🛑 投屏已关闭");
-                }
-            } catch (Throwable t) {}
+                } catch (Throwable t) {}
+            }
         });
     }
 
@@ -337,8 +289,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 i.setPackage(PKG_SELF);
                 i.putExtra("log", log);
                 i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-                // i.addFlags(Intent.FLAG_RECEIVER_FOREGROUND); // 部分系统需要
-                
                 try {
                     Object userAll = XposedHelpers.getStaticObjectField(UserHandle.class, "ALL");
                     Method method = Context.class.getMethod("sendBroadcastAsUser", Intent.class, UserHandle.class);
