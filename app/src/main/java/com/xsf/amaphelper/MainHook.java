@@ -48,10 +48,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     
-    // 🎯 状态与事件
+    // 🎯 实体类
     private static final String CLASS_EVENT_BUS = "ecarx.naviservice.d.e";
     private static final String CLASS_MAP_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
     private static final String CLASS_MAP_SWITCHING_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
+    private static final String CLASS_MAP_GUIDE_INFO = "ecarx.naviservice.map.entity.MapGuideInfo"; // 新增
     private static final String CLASS_MAP_EVENT = "ecarx.naviservice.map.bz";
 
     // 协议
@@ -67,7 +68,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static volatile long drawEpoch = 0;
     private static volatile int currentDynamicVendor = 5; 
     
-    // 标志位
     private static boolean injectFailedOnce = false;
 
     @Override
@@ -79,7 +79,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V157 V126精确复刻版启动");
+        XposedBridge.log("NaviHook: 🚀 V158 全栈数据泵版启动");
 
         // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -89,7 +89,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 mainHandler = new Handler(Looper.getMainLooper());
                 initFakeBinder(); 
                 registerReceiver(systemContext);
-                sendJavaBroadcast("⚡ V157 就绪");
+                sendJavaBroadcast("⚡ V158 就绪");
                 mainHandler.postDelayed(() -> performActiveInjection(), 3000);
             }
         });
@@ -131,11 +131,8 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("✅ 握手成功 (Step 1)");
                             
-                            // 1. 瞬间切到 V0
-                            triggerVendorJump(0);
-                            
-                            // 2. 🔥 立即注入 SwitchingInfo (模拟 V126 的 CRUISE_TO_GUIDE)
-                            injectMapSwitchingInfoAsync();
+                            // 1. 握手即激活流程
+                            triggerActivationSequence();
                             
                             if (provider != null) notifyFrameDrawnAsync(provider);
                             return true;
@@ -151,7 +148,8 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("🎯🎯🎯 收到 Surface! ID=" + id);
                             
-                            if (currentDynamicVendor != 0) triggerVendorJump(0);
+                            // 双重保险
+                            if (currentDynamicVendor != 0) triggerActivationSequence();
                             
                             if (surface != null) {
                                 logSurfaceDetails(surface);
@@ -167,7 +165,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException();
                             
                             sendJavaBroadcast("♻️ Surface移除 ID=" + id2);
-                            triggerVendorJump(5); 
+                            currentDynamicVendor = 5; // Reset
                             drawEpoch++; 
                             return true;
 
@@ -196,13 +194,122 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    private void triggerVendorJump(int targetVendor) {
-        if (currentDynamicVendor == targetVendor && targetVendor != 0) return;
-        currentDynamicVendor = targetVendor;
-        sendJavaBroadcast("🔀 Vendor -> " + targetVendor);
+    // 🔥 V158 核心：完整的激活序列
+    private void triggerActivationSequence() {
+        if (currentDynamicVendor == 0) return;
+        currentDynamicVendor = 0;
+        sendJavaBroadcast("🚀 启动 V158 激活序列...");
         
-        if (targetVendor == 0) {
-            injectMapStatusAsync();
+        new Thread(() -> {
+            try {
+                // 1. 注入布局切换 (SwitchingInfo)
+                injectMapSwitchingInfo();
+                Thread.sleep(200);
+                
+                // 2. 注入全状态序列 (Status 7->16)
+                injectFullStatusSequence();
+                
+                // 3. 注入导航数据 (GuideInfo) - 这是 V158 新增的关键
+                injectMapGuideInfo();
+                
+            } catch (Throwable t) {
+                sendJavaBroadcast("❌ 序列异常: " + t.getMessage());
+            }
+        }).start();
+    }
+
+    // 💉 注入导航数据 (复刻 V126 updateClusterDirectly)
+    private void injectMapGuideInfo() {
+        try {
+            Class<?> guideClass = XposedHelpers.findClass(CLASS_MAP_GUIDE_INFO, hostClassLoader);
+            if (guideClass == null) return;
+            
+            sendJavaBroadcast("💉 注入 GuideInfo (路名/距离)...");
+            
+            // 构造 MapGuideInfo(vendor=0)
+            Object guideInfo = XposedHelpers.newInstance(guideClass, 0);
+            
+            // 填充 V126 验证过的字段
+            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V158激活路"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "前方畅通"); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "turnId", 2); } catch (Throwable t) {} // 左转
+            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 500); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "remainDistance", 1000); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "remainTime", 60); } catch (Throwable t) {}
+            
+            // V126 关键字段: guideType = 1 (TBT)
+            try { XposedHelpers.setIntField(guideInfo, "guideType", 1); } catch (Throwable t) {}
+            try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
+
+            // 发送事件 (盲猜 1002 或 2001，V126直接调用DashboardManager，我们试 EventBus)
+            Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
+            Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
+            
+            // 发送 1002 (Guide Info Update)
+            postEvent(eventConstructor.newInstance(1002, guideInfo));
+            sendJavaBroadcast("✅ GuideInfo 发送完成");
+            
+        } catch (Throwable t) {
+            sendJavaBroadcast("❌ GuideInfo 失败: " + t.getMessage());
+        }
+    }
+    
+    // 💉 注入全状态序列 (7 -> 16)
+    private void injectFullStatusSequence() throws Exception {
+        Class<?> statusClass = XposedHelpers.findClass(CLASS_MAP_STATUS_INFO, hostClassLoader);
+        Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
+        Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
+
+        // 7: APP_START
+        // 8: APP_START_FINISH
+        // 12: APP_ACTIVE
+        // 13: ROUTE_START
+        // 14: ROUTE_SUCCESS
+        // 16: GUIDE_START
+        int[] statuses = {7, 8, 12, 13, 14, 16}; 
+        
+        sendJavaBroadcast("💉 注入状态流 (7->16)...");
+        
+        for (int s : statuses) {
+            Object info = XposedHelpers.newInstance(statusClass, 0); 
+            XposedHelpers.setIntField(info, "status", s);
+            
+            postEvent(eventConstructor.newInstance(1001, info));
+            if (s == 16) postEvent(eventConstructor.newInstance(2002, info)); // 首帧
+            
+            Thread.sleep(150); // 必须有间隔
+        }
+        sendJavaBroadcast("✅ 状态流完成");
+    }
+    
+    // 💉 注入 SwitchingInfo (V126复刻)
+    private void injectMapSwitchingInfo() {
+        try {
+            Class<?> switchClass = XposedHelpers.findClass(CLASS_MAP_SWITCHING_INFO, hostClassLoader);
+            if (switchClass == null) return;
+            
+            // V126: new(old=5, new=0)
+            Object switchInfo = XposedHelpers.newInstance(switchClass, 5, 0);
+            XposedHelpers.setIntField(switchInfo, "mSwitchState", 3); // CRUISE_TO_GUIDE
+            
+            Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
+            Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
+            
+            postEvent(eventConstructor.newInstance(2003, switchInfo));
+            sendJavaBroadcast("✅ 布局切换指令发送");
+            
+        } catch (Throwable t) {
+            sendJavaBroadcast("❌ SwitchingInfo 失败: " + t.getMessage());
+        }
+    }
+    
+    private void postEvent(Object event) {
+        try {
+            Class<?> busClass = XposedHelpers.findClass(CLASS_EVENT_BUS, hostClassLoader);
+            Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
+            XposedHelpers.callMethod(busInstance, "a", event);
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: PostEvent Error: " + t);
         }
     }
 
@@ -222,7 +329,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Exception e) { return; }
                 if (c != null) {
                     c.drawColor(Color.BLACK);
-                    c.drawText("V157 Activated", 50, 150, paint);
+                    c.drawText("V158 Activated", 50, 150, paint);
                     surface.unlockCanvasAndPost(c);
                     if (frame == 1) sendJavaBroadcast("✅ 绘制成功");
                 }
@@ -230,89 +337,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 try { Thread.sleep(100); } catch (Exception e) {}
             }
         }).start();
-    }
-    
-    private void injectMapStatusAsync() {
-        new Thread(() -> {
-            try {
-                sendJavaBroadcast("💉 注入 MapStatusInfo...");
-                Class<?> statusClass = XposedHelpers.findClass(CLASS_MAP_STATUS_INFO, hostClassLoader);
-                Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
-                Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
-
-                // V126 标准序列
-                int[] statuses = {12, 13, 14, 16}; 
-                
-                for (int s : statuses) {
-                    // V126 Style: new MapStatusInfo(vendor=0)
-                    Object info = XposedHelpers.newInstance(statusClass, 0); 
-                    XposedHelpers.setIntField(info, "status", s);
-                    
-                    postEvent(eventConstructor.newInstance(1001, info));
-                    postEvent(eventConstructor.newInstance(2002, info));
-                    
-                    Thread.sleep(80);
-                }
-                sendJavaBroadcast("✅ 状态注入完毕");
-            } catch (Throwable t) {
-                if (!injectFailedOnce) {
-                    sendJavaBroadcast("❌ 状态注入失败: " + t.getClass().getSimpleName());
-                    injectFailedOnce = true;
-                }
-            }
-        }).start();
-    }
-    
-    // 🔥🔥🔥 V157 核心：复刻 V126 的 SwitchingInfo 构造
-    private void injectMapSwitchingInfoAsync() {
-        new Thread(() -> {
-            try {
-                Class<?> switchClass = XposedHelpers.findClass(CLASS_MAP_SWITCHING_INFO, hostClassLoader);
-                if (switchClass == null) {
-                    sendJavaBroadcast("⚠️ 未找到 SwitchingInfo 类");
-                    return;
-                }
-                
-                sendJavaBroadcast("🚀 注入 SwitchingInfo (V126复刻)...");
-                
-                // 1. 严格使用双 Int 构造函数: (oldVendor=5, newVendor=0)
-                Object switchInfo = XposedHelpers.newInstance(switchClass, 5, 0);
-                
-                // 2. 严格设置字段名: mSwitchState
-                // 值 = 3 (CRUISE_TO_GUIDE)
-                XposedHelpers.setIntField(switchInfo, "mSwitchState", 3);
-                
-                // 3. 发送事件 (2003 = Switch)
-                Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
-                Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
-                
-                postEvent(eventConstructor.newInstance(2003, switchInfo));
-                
-                sendJavaBroadcast("✅ SwitchingInfo 注入成功!");
-                
-            } catch (Throwable t) {
-                sendJavaBroadcast("❌ 构造失败(V126): " + t.toString());
-                XposedBridge.log("NaviHook: SwitchInfo Error: " + t);
-                
-                // 备用方案：如果 mSwitchState 字段名变了，打印所有字段名查错
-                try {
-                     java.lang.reflect.Field[] fields = t.getClass().getDeclaredFields();
-                     StringBuilder sb = new StringBuilder("Fields: ");
-                     for(java.lang.reflect.Field f : fields) sb.append(f.getName()).append(",");
-                     XposedBridge.log(sb.toString());
-                } catch(Exception e){}
-            }
-        }).start();
-    }
-    
-    private void postEvent(Object event) {
-        try {
-            Class<?> busClass = XposedHelpers.findClass(CLASS_EVENT_BUS, hostClassLoader);
-            Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
-            XposedHelpers.callMethod(busInstance, "a", event);
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: PostEvent Error: " + t);
-        }
     }
 
     private void notifyFrameDrawnAsync(IBinder provider) {
@@ -414,7 +438,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         TextView tv = new TextView(getContext());
-                        tv.setText("V157-Exact");
+                        tv.setText("V158-Guide");
                         tv.setTextColor(Color.GREEN);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
@@ -430,7 +454,7 @@ public class MainHook implements IXposedHookLoadPackage {
         });
     }
 
-    private void sendJavaBroadcast(String log) {
+   private void sendJavaBroadcast(String log) {
         if (systemContext == null) return;
         new Thread(() -> {
             try {
