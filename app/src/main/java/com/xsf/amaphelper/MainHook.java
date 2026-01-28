@@ -21,6 +21,7 @@ import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.view.Display;
+import android.view.Gravity; // ✅ 修复：补全缺失引用
 import android.view.Surface;
 import android.view.WindowManager;
 import android.widget.TextView;
@@ -41,7 +42,6 @@ public class MainHook implements IXposedHookLoadPackage {
     // 🎯 核心类
     private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
-    // 🎯 V159 新增补漏类
     private static final String CLASS_MAP_CONFIG_BASE = "ecarx.naviservice.map.co"; 
     private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
     
@@ -105,16 +105,14 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {}
         
-        // 3. 🔥 V159 新增：解锁鉴权配置 (co.g() -> true)
+        // 3. 解锁鉴权配置 (co.g() -> true)
         hookConfigClasses(lpparam.classLoader);
         
         // 4. 拦截 bindService
         hookBindService();
     }
     
-    // 🔥 V159: 补全配置类 Hook
     private void hookConfigClasses(ClassLoader cl) {
-        // 1. Hook MapConfigBase.g() -> true
         try {
             Class<?> baseClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_BASE, cl);
             if (baseClass != null) {
@@ -124,16 +122,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log("NaviHook: ConfigBase Hook Error: " + t);
         }
-        
-        // 2. Hook MapConfigWrapper 构造或相关方法 (参考V126)
-        // 这里简单处理，防止它重置 vendor
-        try {
-            Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
-            if (wrapperClass != null) {
-                // 如果有 getMapVendor 之类的方法，也 Hook 掉
-                // 目前先不乱动，主要依赖 co.g()
-            }
-        } catch (Throwable t) {}
     }
 
     private void initFakeBinder() {
@@ -155,7 +143,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException(); 
                             
                             sendJavaBroadcast("✅ 握手成功 (Step 1)");
-                            // 握手即激活
                             triggerActivationSequence();
                             
                             if (provider != null) notifyFrameDrawnAsync(provider);
@@ -170,7 +157,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("🎯 收到 Surface! ID=" + id);
                             
-                            // 双重保险
                             if (currentDynamicVendor != 0) triggerActivationSequence();
                             
                             if (surface != null) {
@@ -192,7 +178,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             return true;
 
                         case 3: // isMapRunning
-                            // sendJavaBroadcast("ℹ️ isMapRunning? -> YES"); // 减少刷屏
                             if (reply != null) {
                                 reply.writeNoException();
                                 reply.writeInt(1); 
@@ -222,16 +207,10 @@ public class MainHook implements IXposedHookLoadPackage {
         
         new Thread(() -> {
             try {
-                // 1. 注入布局切换 (SwitchingInfo)
                 injectMapSwitchingInfo();
                 Thread.sleep(200);
-                
-                // 2. 注入全状态序列
                 injectFullStatusSequence();
-                
-                // 3. 注入导航数据
                 injectMapGuideInfo();
-                
             } catch (Throwable t) {
                 sendJavaBroadcast("❌ 序列异常: " + t.getMessage());
             }
@@ -318,9 +297,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     c = surface.lockCanvas(null);
                 } catch (Exception e) { return; }
                 if (c != null) {
-                    // 🔥 V159: 改用 MAGENTA (洋红) 确保不被当做黑屏
                     c.drawColor(Color.MAGENTA); 
-                    
                     c.drawText("V159 UNVEIL", 50, 150, paint);
                     c.drawText("Vendor: " + currentDynamicVendor, 50, 250, paint);
                     surface.unlockCanvasAndPost(c);
@@ -434,7 +411,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         tv.setTextColor(Color.WHITE);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.MAGENTA); // 显眼背景
+                        tv.setBackgroundColor(Color.MAGENTA); 
                         setContentView(tv);
                     }
                 };
