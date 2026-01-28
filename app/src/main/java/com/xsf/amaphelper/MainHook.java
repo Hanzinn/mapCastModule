@@ -47,11 +47,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     
-    // 🎯 状态与事件
+    // 🎯 状态/事件/切换
     private static final String CLASS_EVENT_BUS = "ecarx.naviservice.d.e";
     private static final String CLASS_MAP_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
+    private static final String CLASS_MAP_SWITCHING_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo"; // 新增
     private static final String CLASS_MAP_EVENT = "ecarx.naviservice.map.bz";
-    private static final String CLASS_MAP_SWITCHING_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
 
     // 协议
     private static final String DESCRIPTOR_SERVICE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
@@ -61,18 +61,13 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Handler mainHandler = null;
     private static Binder fakeServiceBinder = null;
     private static ClassLoader hostClassLoader = null;
-    
     private static Presentation clusterWindow = null;
     
-    // 🛡️ Epoch
     private static volatile long drawEpoch = 0;
-    
-    // ⚡ 动态 Vendor
     private static volatile int currentDynamicVendor = 5; 
     
-    // 标志位
+    // 日志控制
     private static boolean injectFailedOnce = false;
-    private static boolean postEventFailedOnce = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -83,7 +78,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V154 抢跑激活版启动");
+        XposedBridge.log("NaviHook: 🚀 V155 总线欺骗+布局强切版");
 
         // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -93,13 +88,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 mainHandler = new Handler(Looper.getMainLooper());
                 initFakeBinder(); 
                 registerReceiver(systemContext);
-                
-                sendJavaBroadcast("⚡ V154 就绪");
+                sendJavaBroadcast("⚡ V155 就绪");
                 mainHandler.postDelayed(() -> performActiveInjection(), 3000);
             }
         });
 
-        // 2. 动态 Hook Vendor
+        // 2. 动态 Vendor Hook
         try {
             Class<?> managerClass = XposedHelpers.findClassIfExists(CLASS_MAP_MANAGER, lpparam.classLoader);
             if (managerClass != null) {
@@ -110,9 +104,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
             }
-        } catch (Throwable t) {
-             XposedBridge.log("NaviHook: VendorHook Error: " + t);
-        }
+        } catch (Throwable t) {}
         
         // 3. 拦截 bindService
         hookBindService();
@@ -136,11 +128,14 @@ public class MainHook implements IXposedHookLoadPackage {
                             IBinder provider = data.readStrongBinder(); 
                             if (reply != null) reply.writeNoException(); 
                             
-                            sendJavaBroadcast("✅ 握手成功 (IPC OK)");
+                            sendJavaBroadcast("✅ 握手成功 (Step 1)");
                             
-                            // 🔥🔥🔥 V154 关键修改：握手瞬间直接抢跑！
-                            // 不等 addSurface，直接告诉系统：我是高德，我在导航，快切屏！
-                            triggerVendorJump(0); 
+                            // 🔥 V155: 握手即激活
+                            triggerVendorJump(0);
+                            
+                            // 即使不发 addSurface，我们也要尝试自己模拟这一步
+                            // 强制注入 SwitchingInfo，这是 V155 的杀手锏
+                            injectMapSwitchingInfoAsync();
                             
                             if (provider != null) notifyFrameDrawnAsync(provider);
                             return true;
@@ -152,19 +147,15 @@ public class MainHook implements IXposedHookLoadPackage {
                                 surface = Surface.CREATOR.createFromParcel(data);
                             }
                             int id = data.readInt(); 
-
                             if (reply != null) reply.writeNoException();
                             
                             sendJavaBroadcast("🎯🎯🎯 收到 Surface! ID=" + id);
                             
-                            // 收到 Surface 后，再次确认注入，防止漏网
                             if (currentDynamicVendor != 0) triggerVendorJump(0);
                             
                             if (surface != null) {
                                 logSurfaceDetails(surface);
                                 startEpochDrawing(surface); 
-                            } else {
-                                sendJavaBroadcast("⚠️ 警告: Surface 为空!");
                             }
                             createOverlayWindow(); 
                             return true;
@@ -176,13 +167,12 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException();
                             
                             sendJavaBroadcast("♻️ Surface移除 ID=" + id2);
-                            
-                            // 移除时，恢复 Vendor = 5
                             triggerVendorJump(5); 
                             drawEpoch++; 
                             return true;
 
                         case 3: // isMapRunning
+                            sendJavaBroadcast("ℹ️ 系统问: isMapRunning? -> YES");
                             if (reply != null) {
                                 reply.writeNoException();
                                 reply.writeInt(1); 
@@ -207,121 +197,124 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // ⚡ Vendor 跳变控制器
     private void triggerVendorJump(int targetVendor) {
-        // V154: 即使 vendor 没变，如果是 0，也要强制注入状态，因为可能是在重连
         if (currentDynamicVendor == targetVendor && targetVendor != 0) return;
-        
         currentDynamicVendor = targetVendor;
-        sendJavaBroadcast("🔀 Vendor跳变 -> " + targetVendor);
+        sendJavaBroadcast("🔀 Vendor -> " + targetVendor);
         
         if (targetVendor == 0) {
-            injectMapStatusAsync(); // 立即发射状态全家桶
-            injectMapSwitchingInfo(); 
+            injectMapStatusAsync();
         }
     }
 
-    // 🎨 Epoch 绘制线程
     private void startEpochDrawing(Surface surface) {
         if (!surface.isValid()) return;
         final long myEpoch = ++drawEpoch;
-        
         new Thread(() -> {
-            sendJavaBroadcast("🎨 启动绘制 (Epoch " + myEpoch + ")...");
-            Paint paintStroke = new Paint();
-            paintStroke.setColor(Color.RED);
-            paintStroke.setStyle(Paint.Style.STROKE);
-            paintStroke.setStrokeWidth(20);
-            Paint paintText = new Paint();
-            paintText.setColor(Color.WHITE);
-            paintText.setTextSize(60);
-            paintText.setFakeBoldText(true);
-            Paint centerPaint = new Paint();
-            centerPaint.setColor(Color.YELLOW);
-            centerPaint.setStrokeWidth(5);
+            sendJavaBroadcast("🎨 启动绘制...");
+            Paint paint = new Paint();
+            paint.setColor(Color.RED);
+            paint.setTextSize(60);
             int frame = 0;
-
             while (drawEpoch == myEpoch && surface.isValid()) {
                 Canvas c = null;
                 try {
                     c = surface.lockCanvas(null);
-                } catch (IllegalArgumentException e) {
-                    if (frame == 0) sendJavaBroadcast("⚠️ EGL Surface，Canvas不可用");
-                    return; 
                 } catch (Exception e) {
-                    return; 
+                    if(frame==0) sendJavaBroadcast("⚠️ 绘图需要EGL");
+                    return;
                 }
-
                 if (c != null) {
-                    try {
-                        int w = c.getWidth();
-                        int h = c.getHeight();
-                        c.drawColor(Color.BLACK); 
-                        c.drawRect(0, 0, w, h, paintStroke);
-                        c.drawLine(w/2, 0, w/2, h, centerPaint);
-                        c.drawLine(0, h/2, w, h/2, centerPaint);
-                        c.drawText("V154 抢跑版", 50, 150, paintText);
-                        c.drawText("Frame:" + frame++, 50, 250, paintText);
-                    } finally {
-                        surface.unlockCanvasAndPost(c);
-                        if (frame == 1) sendJavaBroadcast("✅ 绘制成功(Frame 1)");
-                    }
+                    c.drawColor(Color.BLACK);
+                    c.drawText("V155 Activated", 50, 150, paint);
+                    surface.unlockCanvasAndPost(c);
+                    if (frame == 1) sendJavaBroadcast("✅ 绘制成功");
                 }
-                try { Thread.sleep(100); } catch (InterruptedException e) {}
+                frame++;
+                try { Thread.sleep(100); } catch (Exception e) {}
             }
         }).start();
     }
     
-    // 💉 状态注入 (V126 序列)
+    // 💉 注入 MapStatusInfo (扩展状态码)
     private void injectMapStatusAsync() {
         new Thread(() -> {
             try {
-                sendJavaBroadcast("💉 注入 V126 状态流...");
-                
+                sendJavaBroadcast("💉 注入 MapStatusInfo...");
                 Class<?> statusClass = XposedHelpers.findClass(CLASS_MAP_STATUS_INFO, hostClassLoader);
                 Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
                 Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
 
-                int[] statuses = {12, 13, 14, 16}; 
+                // 增加状态 1 (READY) 和 10 (RESUME)
+                int[] statuses = {1, 10, 12, 13, 14, 16}; 
                 
                 for (int s : statuses) {
+                    // 使用 Vendor=0 构造
                     Object info = XposedHelpers.newInstance(statusClass, 0); 
                     XposedHelpers.setIntField(info, "status", s);
                     
+                    // 1001: 状态更新
                     postEvent(eventConstructor.newInstance(1001, info));
-                    postEvent(eventConstructor.newInstance(2002, info)); 
+                    // 2002: 首帧通知 (强行帮 j.smali 干活)
+                    postEvent(eventConstructor.newInstance(2002, info));
+                    
                     Thread.sleep(100);
                 }
                 sendJavaBroadcast("✅ 状态注入完毕");
             } catch (Throwable t) {
                 if (!injectFailedOnce) {
-                    sendJavaBroadcast("❌ 注入失败: " + t.getClass().getSimpleName());
+                    sendJavaBroadcast("❌ 状态注入失败: " + t.getClass().getSimpleName());
                     injectFailedOnce = true;
                 }
             }
         }).start();
     }
     
-    private void injectMapSwitchingInfo() {
+    // 🔥 V155 杀手锏：注入 MapSwitchingInfo
+    // 这是触发仪表盘布局切换的关键 (Switch from Widget to Full Map)
+    private void injectMapSwitchingInfoAsync() {
         new Thread(() -> {
             try {
                 Class<?> switchClass = XposedHelpers.findClass(CLASS_MAP_SWITCHING_INFO, hostClassLoader);
-                if (switchClass == null) return;
+                if (switchClass == null) {
+                    sendJavaBroadcast("⚠️ 未找到 MapSwitchingInfo 类");
+                    return;
+                }
+                sendJavaBroadcast("🚀 注入 MapSwitchingInfo (布局切换)...");
                 
                 Object switchInfo = null;
+                // 尝试多种构造方式
                 try {
+                    // 1. 无参构造
                     switchInfo = switchClass.newInstance();
                 } catch (Exception e) {
-                    Constructor<?> c = switchClass.getConstructors()[0];
-                    if (c.getParameterCount() == 1) switchInfo = c.newInstance(0);
+                    // 2. 带参构造 (vendor?)
+                    try {
+                        Constructor<?> c = switchClass.getConstructors()[0];
+                        if (c.getParameterCount() == 1) switchInfo = c.newInstance(0);
+                    } catch (Exception ex) {}
                 }
                 
                 if (switchInfo != null) {
+                    // 尝试设置一些常见字段，让它看起来像真的
+                    try { XposedHelpers.setIntField(switchInfo, "type", 1); } catch (Throwable t) {}
+                    try { XposedHelpers.setIntField(switchInfo, "vendor", 0); } catch (Throwable t) {}
+
                     Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
                     Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
+                    
+                    // Event Code 2003 (SWAP/SWITCH) - 盲猜但概率很高
                     postEvent(eventConstructor.newInstance(2003, switchInfo));
+                    // 备用：Code 1005 (Layout Change)
+                    postEvent(eventConstructor.newInstance(1005, switchInfo));
+                    
+                    sendJavaBroadcast("✅ 布局切换指令已发送");
+                } else {
+                    sendJavaBroadcast("❌ SwitchingInfo 构造失败");
                 }
-            } catch (Throwable t) {}
+            } catch (Throwable t) {
+                XposedBridge.log("NaviHook: SwitchInfo Error: " + t);
+            }
         }).start();
     }
     
@@ -331,10 +324,7 @@ public class MainHook implements IXposedHookLoadPackage {
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             XposedHelpers.callMethod(busInstance, "a", event);
         } catch (Throwable t) {
-            if (!postEventFailedOnce) {
-                 sendJavaBroadcast("❌ PostEvent失败: " + t.getClass().getSimpleName());
-                 postEventFailedOnce = true;
-            }
+            XposedBridge.log("NaviHook: PostEvent Error: " + t);
         }
     }
 
@@ -390,7 +380,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (intent != null && intent.getComponent() != null) {
                     String className = intent.getComponent().getClassName();
                     if (TARGET_SERVICE_IMPL.equals(className)) {
-                        sendJavaBroadcast("🚨 拦截连接 (STATUS_HOOK_SUCCESS)");
+                        sendJavaBroadcast("🚨 拦截连接");
                         param.setResult(true); 
                         ServiceConnection conn = (ServiceConnection) param.args[1];
                         if (conn != null && fakeServiceBinder != null) {
@@ -405,9 +395,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             }
         });
-        } catch (Throwable t) {
-             XposedBridge.log("NaviHook: BindService Hook Error: " + t);
-        }
+        } catch (Throwable t) {}
     }
     
     private void logSurfaceDetails(Surface s) {
@@ -444,7 +432,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         TextView tv = new TextView(getContext());
-                        tv.setText("V154-Pre 强制显示");
+                        tv.setText("V155-Force 强制显示");
                         tv.setTextColor(Color.GREEN);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
@@ -459,11 +447,9 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         });
     }
-private void sendJavaBroadcast(String log) {
-        if (systemContext == null) {
-            XposedBridge.log("NaviHook-Pre: " + log);
-            return;
-        }
+
+    private void sendJavaBroadcast(String log) {
+        if (systemContext == null) return;
         new Thread(() -> {
             try {
                 Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
@@ -481,4 +467,3 @@ private void sendJavaBroadcast(String log) {
         }).start();
     }
 }
-    
