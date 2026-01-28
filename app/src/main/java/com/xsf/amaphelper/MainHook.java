@@ -488,3 +488,4 @@ public class MainHook implements IXposedHookLoadPackage {
             } catch (Throwable t) {}
         }).start();
     }
+}
