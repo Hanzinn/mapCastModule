@@ -2,11 +2,12 @@ package com.xsf.amaphelper;
 
 import android.app.Application;
 import android.app.Presentation;
-import android.content.BroadcastReceiver;
+import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.BroadcastReceiver;
 import android.content.ServiceConnection;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -38,15 +39,16 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String PKG_MAP = "com.autonavi.amapauto";
 
-    private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
+    // 核心类
     private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
-    
-    // 🔥 100% 确定的类名和接口
+    private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
+    
+    // 描述符 (严格匹配反编译结果)
     private static final String DESCRIPTOR_SERVICE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
     private static final String DESCRIPTOR_PROVIDER = "com.autosimilarwidget.view.IAutoWidgetStateProvider";
     
-    // Transaction Codes (基于你的反编译文件)
+    // Transactions
     private static final int TRANSACTION_addSurface = 1;
     private static final int TRANSACTION_removedSurface = 2;
     private static final int TRANSACTION_isMapRunning = 3;
@@ -67,7 +69,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V143 精准回调版启动");
+        XposedBridge.log("NaviHook: 🚀 V144 绝杀版启动");
 
         // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -75,11 +77,12 @@ public class MainHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 systemContext = (Context) param.thisObject;
                 mainHandler = new Handler(Looper.getMainLooper());
-                initFakeBinder(); 
+                initFakeBinder();
                 registerReceiver(systemContext, lpparam.classLoader);
-                sendJavaBroadcast("⚡ V143 就绪 (Context OK)");
                 
-                // 自动执行一次注入
+                sendJavaBroadcast("⚡ V144 就绪");
+                
+                // 3秒后自动触发一次注入 (防止用户手慢)
                 mainHandler.postDelayed(() -> performActiveInjection(lpparam.classLoader), 3000);
             }
         });
@@ -103,7 +106,7 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
                 try {
-                    // 处理 Interface Token 请求
+                    // INTERFACE Token Check
                     if (code == 1598968902) { 
                         if (reply != null) reply.writeString(DESCRIPTOR_SERVICE);
                         return true;
@@ -113,41 +116,38 @@ public class MainHook implements IXposedHookLoadPackage {
 
                     switch (code) {
                         case TRANSACTION_setWidgetStateControl: { // 4
-                            // 1. 读出回调接口
                             IBinder provider = data.readStrongBinder(); 
                             if (reply != null) reply.writeNoException();
                             
-                            sendJavaBroadcast("✅ 握手第一步: 收到 Provider");
+                            sendJavaBroadcast("✅ 收到控制接口 (Provider)");
+                            XposedBridge.log("NaviHook: Got Provider: " + provider);
                             
-                            // 2. 🔥 立即执行反向回调
+                            // 🔥 核心：立即触发“第一帧绘制”信号
                             if (provider != null) {
-                                notifyFrameDrawn(provider);
+                                triggerFirstFrameDrawn(provider);
                             }
                             return true;
                         }
                         
                         case TRANSACTION_addSurface: { // 1
                             Surface surface = null;
-                            int has = data.readInt();
-                            if (has != 0) {
+                            if (data.readInt() != 0) {
                                 surface = Surface.CREATOR.createFromParcel(data);
                             }
-                            int id = data.readInt(); // 必须读
-
+                            int id = data.readInt();
                             if (reply != null) reply.writeNoException();
                             
-                            // 3. 🔥 成功拿到 Surface
-                            sendJavaBroadcast("🎯🎯🎯 收到 addSurface! ID=" + id);
+                            sendJavaBroadcast("🎯🎯🎯 收到 Surface! ID=" + id);
+                            XposedBridge.log("NaviHook: ADD SURFACE SUCCESS: " + surface);
                             
                             if (surface != null) {
-                                drawRedScreen(surface);
+                                drawOnSurface(surface);
                             }
-                            // 双重保险：同时创建悬浮窗
-                            createOverlayWindow();
                             return true;
                         }
 
                         case TRANSACTION_isMapRunning: { // 3
+                            sendJavaBroadcast("ℹ️ 系统询问: isMapRunning? -> YES");
                             if (reply != null) {
                                 reply.writeNoException();
                                 reply.writeInt(1); // true
@@ -157,10 +157,9 @@ public class MainHook implements IXposedHookLoadPackage {
                         
                         case TRANSACTION_removedSurface: // 2
                         case TRANSACTION_dispatchTouchEvent: // 5
-                            // 简单读完参数
-                            if (data.dataAvail() > 0) data.readInt();
-                            if (data.dataAvail() > 0) data.readInt();
-                            if (reply != null) reply.writeNoException();
+                             if (data.dataAvail() > 0) data.readInt(); // consume
+                             if (data.dataAvail() > 0) data.readInt();
+                             if (reply != null) reply.writeNoException();
                             return true;
                     }
                 } catch (Throwable e) {
@@ -171,66 +170,66 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // 🔔 精准反向通知: onWidgetFirstFrameDrawn()
-    private void notifyFrameDrawn(IBinder provider) {
+    // 🔥 触发系统状态机翻转
+    private void triggerFirstFrameDrawn(IBinder provider) {
         new Thread(() -> {
             try {
-                // 模拟一点点处理耗时 (比如 50ms)，太快可能系统还没准备好
-                Thread.sleep(50);
+                Thread.sleep(100); // 极短延时，模拟真实绘制耗时
                 
                 Parcel data = Parcel.obtain();
                 Parcel reply = Parcel.obtain();
                 
                 try {
-                    // 1. 写入 Provider 的 Token
+                    // 对应 IAutoWidgetStateProvider.onWidgetFirstFrameDrawn()
+                    // 签名: ()V
                     data.writeInterfaceToken(DESCRIPTOR_PROVIDER);
-                    // 2. 无参数! (方法是 void onWidgetFirstFrameDrawn())
-                    // 不要 writeInt
                     
-                    sendJavaBroadcast("📣 发送 onWidgetFirstFrameDrawn...");
+                    // Transaction Code = 1 (onWidgetFirstFrameDrawn)
+                    sendJavaBroadcast("📣 发送 FrameDrawn 信号...");
+                    provider.transact(1, data, reply, 0); 
+                    reply.readException();
                     
-                    // 3. Transact Code = 1 (只有一个方法)
-                    provider.transact(1, data, reply, 0); // 0 = SYNC 调用
-                    
-                    reply.readException(); // 检查是否有异常
-                    sendJavaBroadcast("✅ 回调成功! 等待 addSurface...");
-                    
-                } catch (Exception e) {
-                    XposedBridge.log("NaviHook: Callback failed: " + e);
-                    sendJavaBroadcast("❌ 回调失败: " + e.getMessage());
+                    sendJavaBroadcast("✅ 信号发送成功! 等待 Surface...");
+                } catch (Throwable e) {
+                    XposedBridge.log("NaviHook: Callback Failed: " + e);
+                    sendJavaBroadcast("❌ 信号发送失败: " + e.getMessage());
                 } finally {
                     data.recycle();
                     reply.recycle();
                 }
                 
-            } catch (Throwable t) {
-                XposedBridge.log("NaviHook: Thread error: " + t);
-            }
+            } catch (Throwable t) {}
         }).start();
     }
     
-    // 绘制测试 (画红屏)
-    private void drawRedScreen(Surface surface) {
+    // 🎨 尝试绘制 (红底白字)
+    private void drawOnSurface(Surface surface) {
         if (!surface.isValid()) return;
         new Thread(() -> {
             try {
+                // 方案A: Canvas绘制
                 Canvas c = surface.lockCanvas(null);
                 if (c != null) {
                     c.drawColor(Color.RED);
                     Paint p = new Paint();
                     p.setColor(Color.WHITE); 
                     p.setTextSize(60); 
-                    c.drawText("V143 成功", 50, 200, p);
+                    p.setFakeBoldText(true);
+                    c.drawText("V144 攻破", 100, 200, p);
                     surface.unlockCanvasAndPost(c);
-                    sendJavaBroadcast("🎨 Canvas绘制完成");
+                    sendJavaBroadcast("🎨 Canvas绘制完成 (看仪表)");
                 }
-            } catch (Exception e) {
-                sendJavaBroadcast("⚠️ 收到Surface但需要EGL");
+            } catch (IllegalArgumentException e) {
+                // 方案B: 如果Canvas失败，说明是EGL Surface，这里暂不处理，
+                // 但只要走到这里，说明通路已经打通，后面接EGL代码即可。
+                sendJavaBroadcast("⚠️ Surface类型为EGL (需要OpenGL)");
+            } catch (Throwable t) {
+                XposedBridge.log("NaviHook: Draw Error: " + t);
             }
         }).start();
     }
 
-    // 主动注入
+    // 主动注入 (心脏起搏器)
     private void performActiveInjection(ClassLoader cl) {
         mainHandler.post(() -> {
             try {
@@ -240,18 +239,19 @@ public class MainHook implements IXposedHookLoadPackage {
                 
                 Object connection = XposedHelpers.getObjectField(hInstance, "f");
                 if (connection instanceof ServiceConnection) {
+                    // 必须伪造正确的 ComponentName
                     ComponentName fakeCn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
                     ((ServiceConnection) connection).onServiceConnected(fakeCn, fakeServiceBinder);
-                    sendJavaBroadcast("💉 注入成功");
+                    sendJavaBroadcast("💉 主动注入完成");
                 }
             } catch (Throwable t) {
-                 sendJavaBroadcast("注入异常: " + t.getMessage());
+                 sendJavaBroadcast("注入失败: " + t.getMessage());
             }
         });
     }
 
-    // 拦截 bindService (BootClassLoader)
-    private void hookBindService(ClassLoader appClassLoader) {
+    // 拦截 bindService
+    private void hookBindService(ClassLoader cl) {
         try {
             XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
                 Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
@@ -261,7 +261,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (intent != null && intent.getComponent() != null) {
                     String className = intent.getComponent().getClassName();
                     if (TARGET_SERVICE_IMPL.equals(className)) {
-                        sendJavaBroadcast("🚨 拦截连接");
+                        sendJavaBroadcast("🚨 拦截连接请求");
                         param.setResult(true); 
                         ServiceConnection conn = (ServiceConnection) param.args[1];
                         if (conn != null && fakeServiceBinder != null) {
@@ -286,54 +286,12 @@ public class MainHook implements IXposedHookLoadPackage {
             public void onReceive(Context ctx, Intent intent) {
                 if ("XSF_ACTION_START_CAST".equals(intent.getAction())) {
                     performActiveInjection(cl);
-                } else if ("XSF_ACTION_STOP_CAST".equals(intent.getAction())) {
-                    destroyOverlayWindow();
                 }
             }
         };
-        IntentFilter filter = new IntentFilter();
-        filter.addAction("XSF_ACTION_START_CAST");
-        filter.addAction("XSF_ACTION_STOP_CAST");
+        IntentFilter filter = new IntentFilter("XSF_ACTION_START_CAST");
         context.registerReceiver(receiver, filter);
         isReceiverRegistered = true;
-    }
-    
-    private void createOverlayWindow() {
-        if (systemContext == null || clusterWindow != null) return;
-        mainHandler.post(() -> {
-            try {
-                DisplayManager dm = (DisplayManager) systemContext.getSystemService(Context.DISPLAY_SERVICE);
-                Display targetDisplay = null;
-                for (Display d : dm.getDisplays()) {
-                    if (d.getDisplayId() != 0) { targetDisplay = d; break; }
-                }
-                if (targetDisplay == null) return;
-                Context displayContext = systemContext.createDisplayContext(targetDisplay);
-                clusterWindow = new Presentation(displayContext, targetDisplay) {
-                    @Override
-                    protected void onCreate(Bundle savedInstanceState) {
-                        super.onCreate(savedInstanceState);
-                        TextView tv = new TextView(getContext());
-                        tv.setText("V143 强制显示");
-                        tv.setTextColor(Color.GREEN);
-                        tv.setTextSize(50);
-                        tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.BLACK);
-                        setContentView(tv);
-                    }
-                };
-                clusterWindow.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
-                clusterWindow.show();
-            } catch (Throwable t) {}
-        });
-    }
-
-    private void destroyOverlayWindow() {
-        mainHandler.post(() -> {
-            if (clusterWindow != null) {
-                try { clusterWindow.dismiss(); clusterWindow = null; sendJavaBroadcast("🛑 关闭"); } catch (Exception e) {}
-            }
-        });
     }
 
     private void sendJavaBroadcast(String log) {
