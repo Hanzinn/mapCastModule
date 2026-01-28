@@ -47,13 +47,13 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     
-    // 🎯 状态与切换
+    // 🎯 状态与事件
     private static final String CLASS_EVENT_BUS = "ecarx.naviservice.d.e";
     private static final String CLASS_MAP_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
     private static final String CLASS_MAP_EVENT = "ecarx.naviservice.map.bz";
     private static final String CLASS_MAP_SWITCHING_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
 
-    // 协议描述符
+    // 协议
     private static final String DESCRIPTOR_SERVICE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
     private static final String DESCRIPTOR_PROVIDER = "com.autosimilarwidget.view.IAutoWidgetStateProvider";
 
@@ -64,13 +64,13 @@ public class MainHook implements IXposedHookLoadPackage {
     
     private static Presentation clusterWindow = null;
     
-    // 🛡️ V153 核心：Epoch 线程控制 (防竞争)
+    // 🛡️ Epoch
     private static volatile long drawEpoch = 0;
     
-    // ⚡ V153 核心：动态 Vendor (默认5=无地图，0=高德)
+    // ⚡ 动态 Vendor
     private static volatile int currentDynamicVendor = 5; 
     
-    // 错误标志位
+    // 标志位
     private static boolean injectFailedOnce = false;
     private static boolean postEventFailedOnce = false;
 
@@ -83,7 +83,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V153 Epoch稳态+跳变版启动");
+        XposedBridge.log("NaviHook: 🚀 V154 抢跑激活版启动");
 
         // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -91,25 +91,21 @@ public class MainHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 systemContext = (Context) param.thisObject;
                 mainHandler = new Handler(Looper.getMainLooper());
-                
                 initFakeBinder(); 
                 registerReceiver(systemContext);
                 
-                sendJavaBroadcast("⚡ V153 就绪");
-                
-                // 3秒后自动注入
+                sendJavaBroadcast("⚡ V154 就绪");
                 mainHandler.postDelayed(() -> performActiveInjection(), 3000);
             }
         });
 
-        // 2. 动态 Vendor Hook (不再固定返回0，而是返回变量)
+        // 2. 动态 Hook Vendor
         try {
             Class<?> managerClass = XposedHelpers.findClassIfExists(CLASS_MAP_MANAGER, lpparam.classLoader);
             if (managerClass != null) {
                 XposedHelpers.findAndHookMethod(managerClass, "c", new XC_MethodReplacement() {
                     @Override
                     protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
-                        // 动态返回，配合 triggerVendorJump 使用
                         return currentDynamicVendor;
                     }
                 });
@@ -136,15 +132,20 @@ public class MainHook implements IXposedHookLoadPackage {
                     data.enforceInterface(DESCRIPTOR_SERVICE);
 
                     switch (code) {
-                        case 4: // setWidgetStateControl(provider)
+                        case 4: // setWidgetStateControl
                             IBinder provider = data.readStrongBinder(); 
                             if (reply != null) reply.writeNoException(); 
                             
                             sendJavaBroadcast("✅ 握手成功 (IPC OK)");
+                            
+                            // 🔥🔥🔥 V154 关键修改：握手瞬间直接抢跑！
+                            // 不等 addSurface，直接告诉系统：我是高德，我在导航，快切屏！
+                            triggerVendorJump(0); 
+                            
                             if (provider != null) notifyFrameDrawnAsync(provider);
                             return true;
                         
-                        case 1: // addSurface(surface, id)
+                        case 1: // addSurface
                             Surface surface = null;
                             int hasSurface = data.readInt();
                             if (hasSurface != 0) {
@@ -154,19 +155,17 @@ public class MainHook implements IXposedHookLoadPackage {
 
                             if (reply != null) reply.writeNoException();
                             
-                            sendJavaBroadcast("🎯 收到 Surface! ID=" + id);
+                            sendJavaBroadcast("🎯🎯🎯 收到 Surface! ID=" + id);
                             
-                            // 🔥 V153 核心动作：收到Surface瞬间，切换 Vendor 并注入
-                            triggerVendorJump(0); // 切为高德
+                            // 收到 Surface 后，再次确认注入，防止漏网
+                            if (currentDynamicVendor != 0) triggerVendorJump(0);
                             
                             if (surface != null) {
                                 logSurfaceDetails(surface);
-                                // 启动带 Epoch 锁的绘制
                                 startEpochDrawing(surface); 
                             } else {
                                 sendJavaBroadcast("⚠️ 警告: Surface 为空!");
                             }
-                            
                             createOverlayWindow(); 
                             return true;
 
@@ -178,9 +177,9 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("♻️ Surface移除 ID=" + id2);
                             
-                            // 🔥 V153 核心动作：切回默认，并自增 Epoch 杀死绘制线程
+                            // 移除时，恢复 Vendor = 5
                             triggerVendorJump(5); 
-                            drawEpoch++; // Kill threads
+                            drawEpoch++; 
                             return true;
 
                         case 3: // isMapRunning
@@ -208,62 +207,48 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // ⚡ V153 核心：Vendor 跳变控制器
+    // ⚡ Vendor 跳变控制器
     private void triggerVendorJump(int targetVendor) {
-        if (currentDynamicVendor == targetVendor) return;
+        // V154: 即使 vendor 没变，如果是 0，也要强制注入状态，因为可能是在重连
+        if (currentDynamicVendor == targetVendor && targetVendor != 0) return;
         
         currentDynamicVendor = targetVendor;
         sendJavaBroadcast("🔀 Vendor跳变 -> " + targetVendor);
         
-        // 只有切到高德(0)时，才注入状态，迫使系统刷新布局
         if (targetVendor == 0) {
-            injectMapStatusAsync();
-            injectMapSwitchingInfo(); // 尝试盲注 SwitchingInfo
+            injectMapStatusAsync(); // 立即发射状态全家桶
+            injectMapSwitchingInfo(); 
         }
     }
 
-    // 🎨 V153 核心：Epoch 绘制线程 (绝对线程安全)
+    // 🎨 Epoch 绘制线程
     private void startEpochDrawing(Surface surface) {
         if (!surface.isValid()) return;
-        
-        // 1. 获取当前 Epoch 票据
         final long myEpoch = ++drawEpoch;
         
         new Thread(() -> {
             sendJavaBroadcast("🎨 启动绘制 (Epoch " + myEpoch + ")...");
-            
             Paint paintStroke = new Paint();
             paintStroke.setColor(Color.RED);
             paintStroke.setStyle(Paint.Style.STROKE);
             paintStroke.setStrokeWidth(20);
-
-            Paint paintFill = new Paint();
-            paintFill.setColor(Color.GREEN);
-            paintFill.setStyle(Paint.Style.FILL);
-            paintFill.setTextSize(40);
-            paintFill.setFakeBoldText(true);
-
             Paint paintText = new Paint();
             paintText.setColor(Color.WHITE);
             paintText.setTextSize(60);
             paintText.setFakeBoldText(true);
-            
             Paint centerPaint = new Paint();
             centerPaint.setColor(Color.YELLOW);
             centerPaint.setStrokeWidth(5);
-
             int frame = 0;
 
-            // 2. 循环检查 Epoch，一旦过期(drawEpoch变了)立即自杀
             while (drawEpoch == myEpoch && surface.isValid()) {
                 Canvas c = null;
                 try {
                     c = surface.lockCanvas(null);
                 } catch (IllegalArgumentException e) {
                     if (frame == 0) sendJavaBroadcast("⚠️ EGL Surface，Canvas不可用");
-                    return; // 退出线程
+                    return; 
                 } catch (Exception e) {
-                    // 锁失败，可能是被占用了
                     return; 
                 }
 
@@ -271,30 +256,19 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                         int w = c.getWidth();
                         int h = c.getHeight();
-                        
                         c.drawColor(Color.BLACK); 
                         c.drawRect(0, 0, w, h, paintStroke);
-                        
                         c.drawLine(w/2, 0, w/2, h, centerPaint);
                         c.drawLine(0, h/2, w, h/2, centerPaint);
-
-                        c.drawText("LT", 20, 60, paintText); 
-                        c.drawText("RT", w - 80, 60, paintText); 
-                        c.drawText("LB", 20, h - 20, paintText); 
-                        c.drawText("RB", w - 80, h - 20, paintText); 
-
-                        c.drawText("V153 Epoch:" + myEpoch, 50, 150, paintText);
-                        c.drawText("Frame:" + frame++, 50, 250, paintFill);
-                        
+                        c.drawText("V154 抢跑版", 50, 150, paintText);
+                        c.drawText("Frame:" + frame++, 50, 250, paintText);
                     } finally {
                         surface.unlockCanvasAndPost(c);
                         if (frame == 1) sendJavaBroadcast("✅ 绘制成功(Frame 1)");
                     }
                 }
-                
                 try { Thread.sleep(100); } catch (InterruptedException e) {}
             }
-            // 线程自然结束
         }).start();
     }
     
@@ -302,17 +276,15 @@ public class MainHook implements IXposedHookLoadPackage {
     private void injectMapStatusAsync() {
         new Thread(() -> {
             try {
-                sendJavaBroadcast("💉 注入状态流 (V126)...");
+                sendJavaBroadcast("💉 注入 V126 状态流...");
                 
                 Class<?> statusClass = XposedHelpers.findClass(CLASS_MAP_STATUS_INFO, hostClassLoader);
                 Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
                 Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
 
-                // 全状态序列
                 int[] statuses = {12, 13, 14, 16}; 
                 
                 for (int s : statuses) {
-                    // 构造 MapStatusInfo(vendor=0)
                     Object info = XposedHelpers.newInstance(statusClass, 0); 
                     XposedHelpers.setIntField(info, "status", s);
                     
@@ -330,7 +302,6 @@ public class MainHook implements IXposedHookLoadPackage {
         }).start();
     }
     
-    // 💉 尝试注入 SwitchInfo (针对仪表布局切换)
     private void injectMapSwitchingInfo() {
         new Thread(() -> {
             try {
@@ -348,7 +319,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (switchInfo != null) {
                     Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
                     Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
-                    // 2003 = EVENT_MAP_SWITCH_INFO (盲猜)
                     postEvent(eventConstructor.newInstance(2003, switchInfo));
                 }
             } catch (Throwable t) {}
@@ -474,7 +444,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         TextView tv = new TextView(getContext());
-                        tv.setText("V153-Epoch 强制显示");
+                        tv.setText("V154-Pre 强制显示");
                         tv.setTextColor(Color.GREEN);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
@@ -489,8 +459,7 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         });
     }
-
-    private void sendJavaBroadcast(String log) {
+private void sendJavaBroadcast(String log) {
         if (systemContext == null) {
             XposedBridge.log("NaviHook-Pre: " + log);
             return;
@@ -512,3 +481,4 @@ public class MainHook implements IXposedHookLoadPackage {
         }).start();
     }
 }
+    
