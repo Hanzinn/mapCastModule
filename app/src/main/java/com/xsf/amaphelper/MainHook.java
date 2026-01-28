@@ -2,12 +2,11 @@ package com.xsf.amaphelper;
 
 import android.app.Application;
 import android.app.Presentation;
-import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.BroadcastReceiver;
 import android.content.ServiceConnection;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -39,16 +38,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String PKG_MAP = "com.autonavi.amapauto";
 
-    // 🎯 核心目标类
-    private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
+    // 核心类与接口定义
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
-    
-    // 🎯 真正的 Service 类名 (精准匹配)
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
-    
-    // Binder 描述符
-    private static final String DESCRIPTOR = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
-    private static final int INTERFACE_TRANSACTION = 1598968902;
+    private static final String DESCRIPTOR_SERVICE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
+    private static final String DESCRIPTOR_PROVIDER = "com.autosimilarwidget.view.IAutoWidgetStateProvider"; // 盲猜的接口名
     
     // Transaction Codes
     private static final int TRANSACTION_addSurface = 1;
@@ -59,11 +53,12 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static Context systemContext = null;
     private static Handler mainHandler = null;
+    private static Presentation clusterWindow = null;
     private static Binder fakeServiceBinder = null;
     private static boolean isReceiverRegistered = false;
     
-    // 保存回调
-    private static IBinder mProviderCallback = null;
+    // 状态灯反馈
+    private static boolean hasHooked = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -73,111 +68,82 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🚀 V140 协议完美对齐版启动");
+        XposedBridge.log("NaviHook: 🚀 V141 握手闭环版启动");
 
-        // 1. 获取 Context 并设置自动注入
+        // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 systemContext = (Context) param.thisObject;
                 mainHandler = new Handler(Looper.getMainLooper());
-                
                 initFakeBinder(); 
-                registerReceiver(systemContext, lpparam.classLoader);
-                
-                sendJavaBroadcast("⚡ V140 就绪 (Application)");
-                
-                // ⏰ 自动起搏器：2秒后自动尝试注入，不等用户操作，防止错过时机
-                mainHandler.postDelayed(() -> {
-                    sendJavaBroadcast("⏰ 自动执行主动注入...");
-                    performActiveInjection(lpparam.classLoader);
-                }, 2000);
+                registerReceiver(systemContext);
+                sendJavaBroadcast("⚡ V141 就绪 (Waiting for connect)");
             }
         });
 
-        // 2. 强制 MapVendor = 0
+        // 2. 强制 Vendor=0
         try {
             Class<?> managerClass = XposedHelpers.findClassIfExists(CLASS_MAP_MANAGER, lpparam.classLoader);
             if (managerClass != null) {
                 XposedHelpers.findAndHookMethod(managerClass, "c", XC_MethodReplacement.returnConstant(0));
-                XposedBridge.log("NaviHook: 🔓 强制 Vendor=0");
             }
         } catch (Throwable t) {}
         
-        // 3. 拦截 bindService (使用 BootClassLoader 确保拦截 ContextWrapper)
+        // 3. 拦截 bindService (核心入口)
         hookBindService(lpparam.classLoader);
     }
 
-    // 🟢 核心：精准对齐的 Binder 实现
+    // 🟢 核心：Fake Binder (带反向回调)
     private void initFakeBinder() {
         if (fakeServiceBinder != null) return;
         
         fakeServiceBinder = new Binder() {
             @Override
-            public String getInterfaceDescriptor() {
-                return DESCRIPTOR;
-            }
-
-            @Override
             protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
                 try {
-                    // 1) 处理 INTERFACE_TRANSACTION (重要!)
-                    if (code == INTERFACE_TRANSACTION) {
-                        if (reply != null) reply.writeString(DESCRIPTOR);
+                    if (code == 1598968902) { // INTERFACE_TRANSACTION
+                        if (reply != null) reply.writeString(DESCRIPTOR_SERVICE);
                         return true;
                     }
                     
-                    // 2) 校验 Token
-                    data.enforceInterface(DESCRIPTOR);
+                    data.enforceInterface(DESCRIPTOR_SERVICE);
 
                     switch (code) {
                         case TRANSACTION_setWidgetStateControl: { // 4
-                            // ★ 必须把 Binder 读出来，即使还没用，也要清空 Parcel 缓冲区
+                            // 🔥 关键点：读取系统传过来的回调接口
                             IBinder provider = data.readStrongBinder(); 
-                            mProviderCallback = provider;
-                            
-                            // 📝 里程碑 A
-                            sendJavaBroadcast("✅ setWidgetStateControl ok provider=" + (provider != null));
-                            
                             if (reply != null) reply.writeNoException();
                             
-                            // 暂时注释，等待拿到 IAutoWidgetStateProvider Stub 后再开
-                            // notifyFrameDrawn(); 
+                            sendJavaBroadcast("✅ 握手成功! (Step 1/2)");
+                            XposedBridge.log("NaviHook: 收到 Provider, 准备反向调用...");
+                            
+                            // 🔥🔥🔥 立即回调，告诉系统“我好了”
+                            if (provider != null) {
+                                notifyProvider(provider);
+                            }
                             return true;
                         }
                         
                         case TRANSACTION_addSurface: { // 1
-                            // ★ 严格按照协议读取：先读 int(hasSurface)，再读 Surface，最后读 int(id)
                             Surface surface = null;
-                            int hasSurface = data.readInt();
-                            if (hasSurface != 0) {
+                            if (data.readInt() != 0) {
                                 surface = Surface.CREATOR.createFromParcel(data);
                             }
-                            int id = data.readInt(); // ★ 必须读，不可遗漏！
-
-                            // 📝 里程碑 B
-                            sendJavaBroadcast("✅ addSurface: surface=" + (surface != null) + " id=" + id);
-                            XposedBridge.log("NaviHook: addSurface surface=" + surface + " id=" + id);
+                            int id = data.readInt();
 
                             if (reply != null) reply.writeNoException();
                             
-                            // 🎨 尝试绘制 (里程碑 C 的前置)
+                            sendJavaBroadcast("✅✅✅ 收到 Surface! (Step 2/2)");
+                            sendJavaBroadcast("ID: " + id);
+                            
+                            // 只要走到这一步，我们就赢了！
+                            // 尝试在 Surface 上画个红底，或者直接起悬浮窗
                             if (surface != null) {
-                                drawOnSurface(surface);
+                                drawRedScreen(surface);
                             }
-                            return true;
-                        }
-
-                        case TRANSACTION_removedSurface: { // 2
-                            // ★ 同样严格读取
-                            int hasSurface = data.readInt();
-                            if (hasSurface != 0) {
-                                Surface.CREATOR.createFromParcel(data); // 读出来丢掉
-                            }
-                            int id = data.readInt(); // 必须读
-
-                            if (reply != null) reply.writeNoException();
-                            sendJavaBroadcast("🧹 removedSurface id=" + id);
+                            // 同时启动悬浮窗作为双重保障
+                            createOverlayWindow(); 
                             return true;
                         }
 
@@ -188,92 +154,85 @@ public class MainHook implements IXposedHookLoadPackage {
                             }
                             return true;
                         }
-
-                        case TRANSACTION_dispatchTouchEvent: { // 5
-                            // ★ 严格读取 MotionEvent
-                            int hasEvent = data.readInt();
-                            if (hasEvent != 0) {
-                                android.view.MotionEvent.CREATOR.createFromParcel(data); // 读出来丢掉
-                            }
+                        
+                        // 其他不需要处理，只要读完 Parcel 即可
+                        case TRANSACTION_removedSurface: 
+                        case TRANSACTION_dispatchTouchEvent:
+                            // 简单读完 buffer 防止报错
+                            if (data.dataAvail() > 0) data.readInt(); 
+                            if (data.dataAvail() > 0) data.readInt(); // 多读几次无妨
                             if (reply != null) reply.writeNoException();
                             return true;
-                        }
                     }
                 } catch (Throwable e) {
                     XposedBridge.log("NaviHook: Binder Error: " + e);
-                    sendJavaBroadcast("❌ Binder异常: " + e.getClass().getSimpleName() + ":" + e.getMessage());
                 }
                 return super.onTransact(code, data, reply, flags);
             }
         };
-        XposedBridge.log("NaviHook: 🎭 伪造 Binder V140 已创建");
     }
     
-    // 🎨 测试绘制：在 Surface 上画红色
-    private void drawOnSurface(Surface surface) {
-        if (surface == null || !surface.isValid()) return;
+    // 🔔 反向通知逻辑 (盲打 Transaction 1, 2, 3)
+    private void notifyProvider(IBinder provider) {
         new Thread(() -> {
             try {
-                sendJavaBroadcast("🖌️ 尝试 LockCanvas 绘制...");
-                Canvas canvas = null;
+                // 模拟一点点延时
+                Thread.sleep(200);
+                
+                Parcel data = Parcel.obtain();
+                Parcel reply = Parcel.obtain();
+                
                 try {
-                    canvas = surface.lockCanvas(null);
-                } catch (IllegalArgumentException | OutOfMemoryError e) {
-                    // 📝 里程碑 C (失败分支)
-                    sendJavaBroadcast("⚠️ lockCanvas 失败 (需要 EGL): " + e.getMessage());
-                    return;
+                    // 尝试 Transaction 1 (通常是 onWidgetFirstFrameDrawn 或 onStateChanged)
+                    // 注意：这里 Interface Token 可能不准，如果系统校验 Token 可能会失败
+                    // 但我们先试 com.autosimilarwidget.view.IAutoWidgetStateProvider
+                    data.writeInterfaceToken(DESCRIPTOR_PROVIDER);
+                    
+                    // 有些接口需要传 int (比如 0 或 1)
+                    // 我们先试无参调用
+                    sendJavaBroadcast("📣 尝试反向回调 Transact 1...");
+                    provider.transact(1, data, reply, 0);
+                    reply.readException();
+                    sendJavaBroadcast("✅ 回调 Transact 1 成功!");
+                } catch (Exception e) {
+                    XposedBridge.log("NaviHook: Callback 1 failed: " + e);
+                    // 如果失败，尝试带参数的 (例如 surfaceID 或 state)
+                    // data.writeInt(1); ...
+                } finally {
+                    data.recycle();
+                    reply.recycle();
                 }
-
-                if (canvas != null) {
-                    canvas.drawColor(Color.RED); // 画大红屏
-                    Paint paint = new Paint();
-                    paint.setColor(Color.WHITE);
-                    paint.setTextSize(60);
-                    paint.setFakeBoldText(true);
-                    canvas.drawText("V140 通路打通!", 50, 100, paint);
-                    canvas.drawText("等待 EGL 注入...", 50, 200, paint);
-                    surface.unlockCanvasAndPost(canvas);
-                    // 📝 里程碑 C (成功分支)
-                    sendJavaBroadcast("✅ 绘制成功！请看仪表盘是否变红！");
-                }
+                
             } catch (Throwable t) {
-                sendJavaBroadcast("❌ 绘制线程异常: " + t.getMessage());
-                XposedBridge.log(t);
+                XposedBridge.log("NaviHook: Provider thread error: " + t);
             }
         }).start();
     }
     
-    // 主动注入逻辑
-    private void performActiveInjection(ClassLoader cl) {
-        mainHandler.post(() -> {
+    // 绘制测试 (画红屏)
+    private void drawRedScreen(Surface surface) {
+        if (!surface.isValid()) return;
+        new Thread(() -> {
             try {
-                // sendJavaBroadcast("💉 执行主动注入...");
-                Class<?> hClass = XposedHelpers.findClass(CLASS_AMAP_AIDL_MANAGER, cl);
-                Object hInstance = XposedHelpers.getStaticObjectField(hClass, "e"); 
-                
-                if (hInstance == null) {
-                    sendJavaBroadcast("❌ 注入失败: h单例为空");
-                    return;
+                Canvas c = surface.lockCanvas(null);
+                if (c != null) {
+                    c.drawColor(Color.RED);
+                    Paint p = new Paint();
+                    p.setColor(Color.WHITE); 
+                    p.setTextSize(60); 
+                    c.drawText("V141 破解成功", 50, 200, p);
+                    surface.unlockCanvasAndPost(c);
                 }
-                
-                Object connection = XposedHelpers.getObjectField(hInstance, "f");
-                if (connection instanceof ServiceConnection) {
-                    ComponentName fakeCn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
-                    
-                    // 🔥 暴力调用
-                    ((ServiceConnection) connection).onServiceConnected(fakeCn, fakeServiceBinder);
-                    
-                    sendJavaBroadcast("✅ onServiceConnected injected");
-                }
-            } catch (Throwable t) {
-                sendJavaBroadcast("❌ 注入异常: " + t.getMessage());
+            } catch (Exception e) {
+                sendJavaBroadcast("⚠️ EGL Surface (Canvas不可用)");
             }
-        });
+        }).start();
     }
-    
-    // 拦截 bindService (使用 null ClassLoader 以匹配 ContextWrapper)
+
+    // 拦截 bindService
     private void hookBindService(ClassLoader appClassLoader) {
         try {
+            // 使用 null ClassLoader 以匹配系统类
             XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
                 Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
             @Override
@@ -282,12 +241,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (intent != null && intent.getComponent() != null) {
                     String className = intent.getComponent().getClassName();
                     
-                    // 🔥 精准匹配目标 Service 类名
                     if (TARGET_SERVICE_IMPL.equals(className)) {
-                        XposedBridge.log("NaviHook: 🚨 拦截连接 -> " + className);
-                        sendJavaBroadcast("✅ hijack bindService hit");
-                        
-                        param.setResult(true); // 阻止系统真实调用
+                        XposedBridge.log("NaviHook: 🚨 拦截 -> " + className);
+                        sendJavaBroadcast("🚨 拦截连接请求 (Service劫持)");
+                        param.setResult(true); 
                         
                         ServiceConnection conn = (ServiceConnection) param.args[1];
                         if (conn != null && fakeServiceBinder != null) {
@@ -295,36 +252,58 @@ public class MainHook implements IXposedHookLoadPackage {
                                  try {
                                      ComponentName cn = new ComponentName(PKG_MAP, className);
                                      conn.onServiceConnected(cn, fakeServiceBinder);
-                                     sendJavaBroadcast("✅ 劫持回调成功");
-                                 } catch (Throwable t) {
-                                     XposedBridge.log("Cb err: " + t);
-                                 }
+                                     sendJavaBroadcast("✅ 劫持成功! 等待握手...");
+                                 } catch (Throwable t) {}
                              });
                         }
                     }
                 }
             }
         });
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: Hook bindService error: " + t);
-        }
+        } catch (Throwable t) {}
+    }
+    
+    // 悬浮窗 (作为 addSurface 拿不到时的备用方案)
+    private void createOverlayWindow() {
+        if (systemContext == null || clusterWindow != null) return;
+        mainHandler.post(() -> {
+            try {
+                DisplayManager dm = (DisplayManager) systemContext.getSystemService(Context.DISPLAY_SERVICE);
+                Display targetDisplay = null;
+                for (Display d : dm.getDisplays()) {
+                    if (d.getDisplayId() != 0) { targetDisplay = d; break; }
+                }
+                if (targetDisplay == null) return;
+
+                Context displayContext = systemContext.createDisplayContext(targetDisplay);
+                clusterWindow = new Presentation(displayContext, targetDisplay) {
+                    @Override
+                    protected void onCreate(Bundle savedInstanceState) {
+                        super.onCreate(savedInstanceState);
+                        TextView tv = new TextView(getContext());
+                        tv.setText("V141 强行显示");
+                        tv.setTextColor(Color.GREEN);
+                        tv.setTextSize(50);
+                        tv.setGravity(Gravity.CENTER);
+                        tv.setBackgroundColor(Color.BLACK);
+                        setContentView(tv);
+                    }
+                };
+                clusterWindow.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                clusterWindow.show();
+            } catch (Throwable t) {}
+        });
     }
 
-    private void registerReceiver(Context context, ClassLoader cl) {
+    private void registerReceiver(Context context) {
         if (isReceiverRegistered) return;
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context ctx, Intent intent) {
-                if ("XSF_ACTION_START_CAST".equals(intent.getAction())) {
-                    performActiveInjection(cl);
-                } else if ("XSF_ACTION_STOP_CAST".equals(intent.getAction())) {
-                    // 保留关闭逻辑
-                }
+                // 这里可以加手动重置逻辑
             }
         };
-        IntentFilter filter = new IntentFilter();
-        filter.addAction("XSF_ACTION_START_CAST");
-        filter.addAction("XSF_ACTION_STOP_CAST");
+        IntentFilter filter = new IntentFilter("XSF_ACTION_RESET");
         context.registerReceiver(receiver, filter);
         isReceiverRegistered = true;
     }
