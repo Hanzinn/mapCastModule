@@ -21,7 +21,7 @@ import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.view.Display;
-import android.view.Gravity;
+import android.view.Gravity; // ✅ 确保 Gravity 存在
 import android.view.Surface;
 import android.view.WindowManager;
 import android.widget.TextView;
@@ -39,11 +39,14 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String PKG_MAP = "com.autonavi.amapauto";
 
+    // 🎯 核心类与AIDL管理 (✅ 修复：补全缺失的定义)
+    private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
+    
     // 🎯 V126 核心越狱类
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String CLASS_MAP_CONFIG_BASE = "ecarx.naviservice.map.co"; 
     private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
-    private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel"; // 🔥 V160 新增
+    private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel"; 
     
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     
@@ -92,7 +95,7 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         });
 
-        // 2. 🔥🔥🔥 V160 核心：全方位身份伪造 (Hook 所有能查 Vendor 的地方)
+        // 2. 🔥🔥🔥 V160 核心：全方位身份伪造
         hookIdentityClasses(lpparam.classLoader);
         
         // 3. 拦截 bindService
@@ -130,11 +133,10 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {}
         
-        // D. MapConfigWrapper (V126 也有处理，防止它重置状态)
+        // D. MapConfigWrapper
         try {
             Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
             if (wrapperClass != null) {
-                // 拦截具体实现类的 b 方法返回 0
                 XposedHelpers.findAndHookMethod(wrapperClass, "a", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -175,7 +177,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("✅ 握手成功 (Step 1)");
                             
-                            // 延时激活，避免在 Binder 线程里做太重的操作导致死锁/超时
+                            // 延时激活
                             if (mainHandler != null) {
                                 mainHandler.postDelayed(() -> triggerV126Sequence(), 200);
                             }
@@ -237,12 +239,10 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // 🔥 V160 核心：V126 标准激活序列
     private void triggerV126Sequence() {
         new Thread(() -> {
             try {
-                // 1. 注入布局切换 (SwitchingInfo: 5 -> 0, State 3)
-                // 这里我们欺骗系统说“刚才我是5，现在我是0”，虽然我们一直Hook成0，但这个事件是告诉UI层切换的
+                // 1. 注入布局切换 (SwitchingInfo: 5 -> 0)
                 injectMapSwitchingInfo();
                 Thread.sleep(300);
                 
@@ -271,13 +271,11 @@ public class MainHook implements IXposedHookLoadPackage {
             try { XposedHelpers.setIntField(guideInfo, "remainDistance", 2500); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "remainTime", 120); } catch (Throwable t) {}
             
-            // 关键：告诉仪表盘这是 TBT 模式
             try { XposedHelpers.setIntField(guideInfo, "guideType", 1); } catch (Throwable t) {}
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
 
             Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
             Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
-            // 1002: GuideInfo Update
             postEvent(eventConstructor.newInstance(1002, guideInfo));
             sendJavaBroadcast("✅ GuideInfo 数据已泵入");
             
@@ -291,7 +289,6 @@ public class MainHook implements IXposedHookLoadPackage {
         Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
         Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
 
-        // V126 完整流程
         int[] statuses = {7, 8, 12, 13, 14, 16}; 
         sendJavaBroadcast("💉 执行状态序列 (7->16)...");
         
@@ -299,9 +296,8 @@ public class MainHook implements IXposedHookLoadPackage {
             Object info = XposedHelpers.newInstance(statusClass, TARGET_VENDOR); 
             XposedHelpers.setIntField(info, "status", s);
             
-            postEvent(eventConstructor.newInstance(1001, info)); // 常规更新
-            if (s == 16) postEvent(eventConstructor.newInstance(2002, info)); // 首帧绘制
-            
+            postEvent(eventConstructor.newInstance(1001, info));
+            if (s == 16) postEvent(eventConstructor.newInstance(2002, info));
             Thread.sleep(150);
         }
     }
@@ -311,9 +307,8 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> switchClass = XposedHelpers.findClass(CLASS_MAP_SWITCHING_INFO, hostClassLoader);
             if (switchClass == null) return;
             
-            // 模拟 5 -> 0 切换
             Object switchInfo = XposedHelpers.newInstance(switchClass, 5, 0);
-            XposedHelpers.setIntField(switchInfo, "mSwitchState", 3); // CRUISE_TO_GUIDE
+            XposedHelpers.setIntField(switchInfo, "mSwitchState", 3); 
             
             Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
             Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
@@ -350,7 +345,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     c = surface.lockCanvas(null);
                 } catch (Exception e) { return; }
                 if (c != null) {
-                    c.drawColor(Color.BLUE); // 蓝色背景，区别于之前的
+                    c.drawColor(Color.BLUE); 
                     c.drawText("V160 Jailbreak", 50, 150, paint);
                     surface.unlockCanvasAndPost(c);
                     if (frame == 1) sendJavaBroadcast("✅ 绘制成功 (蓝色)");
@@ -397,7 +392,7 @@ public class MainHook implements IXposedHookLoadPackage {
         });
     }
 
-  private void hookBindService() {
+    private void hookBindService() {
         try {
             XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
                 Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
@@ -463,7 +458,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         tv.setTextColor(Color.WHITE);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.BLUE); // 蓝色
+                        tv.setBackgroundColor(Color.BLUE); 
                         setContentView(tv);
                     }
                 };
@@ -493,4 +488,3 @@ public class MainHook implements IXposedHookLoadPackage {
             } catch (Throwable t) {}
         }).start();
     }
-}
