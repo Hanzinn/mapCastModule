@@ -21,7 +21,7 @@ import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.view.Display;
-import android.view.Gravity; // ✅ 修复：补全缺失引用
+import android.view.Gravity;
 import android.view.Surface;
 import android.view.WindowManager;
 import android.widget.TextView;
@@ -39,11 +39,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String PKG_MAP = "com.autonavi.amapauto";
 
-    // 🎯 核心类
-    private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
+    // 🎯 V126 核心越狱类
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String CLASS_MAP_CONFIG_BASE = "ecarx.naviservice.map.co"; 
     private static final String CLASS_MAP_CONFIG_WRAPPER = "ecarx.naviservice.map.ce"; 
+    private static final String CLASS_NAVI_BASE_MODEL = "com.ecarx.sdk.navi.model.base.NaviBaseModel"; // 🔥 V160 新增
     
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     
@@ -64,9 +64,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Presentation clusterWindow = null;
     
     private static volatile long drawEpoch = 0;
-    private static volatile int currentDynamicVendor = 5; 
     
-    private static boolean injectFailedOnce = false;
+    // 🔒 身份锁定：永远是 0 (高德)
+    private static final int TARGET_VENDOR = 0; 
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -77,7 +77,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V159 鉴权解锁版启动");
+        XposedBridge.log("NaviHook: 🚀 V160 全面越狱版启动");
 
         // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
@@ -87,41 +87,72 @@ public class MainHook implements IXposedHookLoadPackage {
                 mainHandler = new Handler(Looper.getMainLooper());
                 initFakeBinder(); 
                 registerReceiver(systemContext);
-                sendJavaBroadcast("⚡ V159 就绪");
+                sendJavaBroadcast("⚡ V160 就绪");
                 mainHandler.postDelayed(() -> performActiveInjection(), 3000);
             }
         });
 
-        // 2. 基础 Vendor Hook
-        try {
-            Class<?> managerClass = XposedHelpers.findClassIfExists(CLASS_MAP_MANAGER, lpparam.classLoader);
-            if (managerClass != null) {
-                XposedHelpers.findAndHookMethod(managerClass, "c", new XC_MethodReplacement() {
-                    @Override
-                    protected Object replaceHookedMethod(MethodHookParam param) {
-                        return currentDynamicVendor;
-                    }
-                });
-            }
-        } catch (Throwable t) {}
+        // 2. 🔥🔥🔥 V160 核心：全方位身份伪造 (Hook 所有能查 Vendor 的地方)
+        hookIdentityClasses(lpparam.classLoader);
         
-        // 3. 解锁鉴权配置 (co.g() -> true)
-        hookConfigClasses(lpparam.classLoader);
-        
-        // 4. 拦截 bindService
+        // 3. 拦截 bindService
         hookBindService();
     }
     
-    private void hookConfigClasses(ClassLoader cl) {
+    // 🔐 身份伪造模块
+    private void hookIdentityClasses(ClassLoader cl) {
+        // A. MapManager.c -> 0
+        try {
+            Class<?> managerClass = XposedHelpers.findClassIfExists(CLASS_MAP_MANAGER, cl);
+            if (managerClass != null) {
+                XposedHelpers.findAndHookMethod(managerClass, "c", XC_MethodReplacement.returnConstant(TARGET_VENDOR));
+                XposedBridge.log("NaviHook: 🔓 MapManager 越狱成功");
+            }
+        } catch (Throwable t) {}
+
+        // B. NaviBaseModel.getMapVendor -> 0 (V126 关键点!)
+        try {
+            Class<?> baseModelClass = XposedHelpers.findClassIfExists(CLASS_NAVI_BASE_MODEL, cl);
+            if (baseModelClass != null) {
+                XposedHelpers.findAndHookMethod(baseModelClass, "getMapVendor", XC_MethodReplacement.returnConstant(TARGET_VENDOR));
+                XposedBridge.log("NaviHook: 🔓 NaviBaseModel 越狱成功");
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: NaviBaseModel Hook Failed: " + t);
+        }
+
+        // C. MapConfigBase.g -> true (鉴权)
         try {
             Class<?> baseClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_BASE, cl);
             if (baseClass != null) {
                 XposedHelpers.findAndHookMethod(baseClass, "g", XC_MethodReplacement.returnConstant(true));
-                XposedBridge.log("NaviHook: 🔓 已解锁 MapConfigBase.g()");
+                XposedBridge.log("NaviHook: 🔓 ConfigBase 越狱成功");
             }
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: ConfigBase Hook Error: " + t);
-        }
+        } catch (Throwable t) {}
+        
+        // D. MapConfigWrapper (V126 也有处理，防止它重置状态)
+        try {
+            Class<?> wrapperClass = XposedHelpers.findClassIfExists(CLASS_MAP_CONFIG_WRAPPER, cl);
+            if (wrapperClass != null) {
+                // 拦截具体实现类的 b 方法返回 0
+                XposedHelpers.findAndHookMethod(wrapperClass, "a", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        Object concreteConfig = param.getResult(); 
+                        if (concreteConfig != null) {
+                            hookConcreteConfig(concreteConfig.getClass());
+                        }
+                    }
+                });
+            }
+        } catch (Throwable t) {}
+    }
+    
+    private void hookConcreteConfig(Class<?> clazz) {
+        try {
+            XposedHelpers.findAndHookMethod(clazz, "b", XC_MethodReplacement.returnConstant(TARGET_VENDOR));
+            XposedBridge.log("NaviHook: 🔓 具体配置类越狱: " + clazz.getName());
+        } catch (Throwable t) {}
     }
 
     private void initFakeBinder() {
@@ -143,7 +174,11 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException(); 
                             
                             sendJavaBroadcast("✅ 握手成功 (Step 1)");
-                            triggerActivationSequence();
+                            
+                            // 延时激活，避免在 Binder 线程里做太重的操作导致死锁/超时
+                            if (mainHandler != null) {
+                                mainHandler.postDelayed(() -> triggerV126Sequence(), 200);
+                            }
                             
                             if (provider != null) notifyFrameDrawnAsync(provider);
                             return true;
@@ -157,7 +192,10 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("🎯 收到 Surface! ID=" + id);
                             
-                            if (currentDynamicVendor != 0) triggerActivationSequence();
+                            // 双重保险
+                            if (mainHandler != null) {
+                                mainHandler.postDelayed(() -> triggerV126Sequence(), 100);
+                            }
                             
                             if (surface != null) {
                                 logSurfaceDetails(surface);
@@ -173,7 +211,6 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException();
                             
                             sendJavaBroadcast("♻️ Surface移除 ID=" + id2);
-                            currentDynamicVendor = 5; 
                             drawEpoch++; 
                             return true;
 
@@ -200,17 +237,21 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    private void triggerActivationSequence() {
-        if (currentDynamicVendor == 0) return;
-        currentDynamicVendor = 0;
-        sendJavaBroadcast("🔀 Vendor -> 0 (激活序列启动)");
-        
+    // 🔥 V160 核心：V126 标准激活序列
+    private void triggerV126Sequence() {
         new Thread(() -> {
             try {
+                // 1. 注入布局切换 (SwitchingInfo: 5 -> 0, State 3)
+                // 这里我们欺骗系统说“刚才我是5，现在我是0”，虽然我们一直Hook成0，但这个事件是告诉UI层切换的
                 injectMapSwitchingInfo();
-                Thread.sleep(200);
+                Thread.sleep(300);
+                
+                // 2. 注入全状态序列 (7 -> 16)
                 injectFullStatusSequence();
+                
+                // 3. 注入导航数据 (GuideInfo)
                 injectMapGuideInfo();
+                
             } catch (Throwable t) {
                 sendJavaBroadcast("❌ 序列异常: " + t.getMessage());
             }
@@ -222,19 +263,23 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> guideClass = XposedHelpers.findClass(CLASS_MAP_GUIDE_INFO, hostClassLoader);
             if (guideClass == null) return;
             
-            Object guideInfo = XposedHelpers.newInstance(guideClass, 0);
-            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V159洋红色"); } catch (Throwable t) {}
-            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "即将点亮"); } catch (Throwable t) {}
+            Object guideInfo = XposedHelpers.newInstance(guideClass, TARGET_VENDOR);
+            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V160激活成功"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "前方畅通"); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "turnId", 2); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 500); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "remainDistance", 1000); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "remainTime", 60); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 888); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "remainDistance", 2500); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "remainTime", 120); } catch (Throwable t) {}
+            
+            // 关键：告诉仪表盘这是 TBT 模式
             try { XposedHelpers.setIntField(guideInfo, "guideType", 1); } catch (Throwable t) {}
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
 
             Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
             Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
+            // 1002: GuideInfo Update
             postEvent(eventConstructor.newInstance(1002, guideInfo));
+            sendJavaBroadcast("✅ GuideInfo 数据已泵入");
             
         } catch (Throwable t) {
             sendJavaBroadcast("❌ GuideInfo 失败: " + t.getMessage());
@@ -246,13 +291,18 @@ public class MainHook implements IXposedHookLoadPackage {
         Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
         Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
 
+        // V126 完整流程
         int[] statuses = {7, 8, 12, 13, 14, 16}; 
+        sendJavaBroadcast("💉 执行状态序列 (7->16)...");
+        
         for (int s : statuses) {
-            Object info = XposedHelpers.newInstance(statusClass, 0); 
+            Object info = XposedHelpers.newInstance(statusClass, TARGET_VENDOR); 
             XposedHelpers.setIntField(info, "status", s);
-            postEvent(eventConstructor.newInstance(1001, info));
-            if (s == 16) postEvent(eventConstructor.newInstance(2002, info));
-            Thread.sleep(100);
+            
+            postEvent(eventConstructor.newInstance(1001, info)); // 常规更新
+            if (s == 16) postEvent(eventConstructor.newInstance(2002, info)); // 首帧绘制
+            
+            Thread.sleep(150);
         }
     }
     
@@ -261,12 +311,15 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> switchClass = XposedHelpers.findClass(CLASS_MAP_SWITCHING_INFO, hostClassLoader);
             if (switchClass == null) return;
             
+            // 模拟 5 -> 0 切换
             Object switchInfo = XposedHelpers.newInstance(switchClass, 5, 0);
-            XposedHelpers.setIntField(switchInfo, "mSwitchState", 3); 
+            XposedHelpers.setIntField(switchInfo, "mSwitchState", 3); // CRUISE_TO_GUIDE
             
             Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
             Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
             postEvent(eventConstructor.newInstance(2003, switchInfo));
+            
+            sendJavaBroadcast("🚀 布局切换指令 (5->0) 已发送");
             
         } catch (Throwable t) {
             sendJavaBroadcast("❌ SwitchingInfo 失败: " + t.getMessage());
@@ -285,7 +338,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!surface.isValid()) return;
         final long myEpoch = ++drawEpoch;
         new Thread(() -> {
-            sendJavaBroadcast("🎨 启动洋红色绘制...");
+            sendJavaBroadcast("🎨 启动绘制...");
             Paint paint = new Paint();
             paint.setColor(Color.WHITE);
             paint.setTextSize(60);
@@ -297,11 +350,10 @@ public class MainHook implements IXposedHookLoadPackage {
                     c = surface.lockCanvas(null);
                 } catch (Exception e) { return; }
                 if (c != null) {
-                    c.drawColor(Color.MAGENTA); 
-                    c.drawText("V159 UNVEIL", 50, 150, paint);
-                    c.drawText("Vendor: " + currentDynamicVendor, 50, 250, paint);
+                    c.drawColor(Color.BLUE); // 蓝色背景，区别于之前的
+                    c.drawText("V160 Jailbreak", 50, 150, paint);
                     surface.unlockCanvasAndPost(c);
-                    if (frame == 1) sendJavaBroadcast("✅ 绘制成功 (洋红)");
+                    if (frame == 1) sendJavaBroadcast("✅ 绘制成功 (蓝色)");
                 }
                 frame++;
                 try { Thread.sleep(100); } catch (Exception e) {}
@@ -345,7 +397,7 @@ public class MainHook implements IXposedHookLoadPackage {
         });
     }
 
-    private void hookBindService() {
+  private void hookBindService() {
         try {
             XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
                 Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
@@ -407,11 +459,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         TextView tv = new TextView(getContext());
-                        tv.setText("V159-Unveil");
+                        tv.setText("V160-Jailbreak");
                         tv.setTextColor(Color.WHITE);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.MAGENTA); 
+                        tv.setBackgroundColor(Color.BLUE); // 蓝色
                         setContentView(tv);
                     }
                 };
