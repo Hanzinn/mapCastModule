@@ -8,6 +8,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.content.pm.ServiceInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -28,6 +33,8 @@ import android.widget.TextView;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -43,7 +50,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_MAP = "com.autonavi.amapauto";
 
     // 🎯 核心类
-    private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String CLASS_MAP_CONFIG_BASE = "ecarx.naviservice.map.co"; 
     
@@ -57,9 +63,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String DESCRIPTOR_SERVICE = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
     private static final String DESCRIPTOR_PROVIDER = "com.autosimilarwidget.view.IAutoWidgetStateProvider";
     
-    // 目标（不存在的）服务
+    // 目标服务 (不存在的)
     private static final String TARGET_SERVICE_IMPL = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
-    // 宿主服务 (9.1 肯定有的)
+    // 宿主服务 (9.1 真实存在的，用作寄生宿主)
     private static final String HOST_SERVICE_IMPL = "com.autonavi.amapauto.service.MapService"; 
 
     private static Context systemContext = null;
@@ -83,7 +89,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V181 (Fix) 裸奔兼容版启动 (No-Token)");
+        XposedBridge.log("NaviHook: 🚀 V182 缝合怪终极版 (PM+寄生+NoToken)");
 
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
@@ -92,7 +98,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 mainHandler = new Handler(Looper.getMainLooper());
                 initFakeBinder(); 
                 registerReceiver(systemContext);
-                sendJavaBroadcast("⚡ V181 就绪");
+                sendJavaBroadcast("⚡ V182 就绪");
             }
         });
 
@@ -107,10 +113,98 @@ public class MainHook implements IXposedHookLoadPackage {
         // 2. 解锁配置
         hookConfigClasses(lpparam.classLoader);
         
-        // 3. 拦截 Bind
+        // 3. 🔥 步骤一：PM 欺骗 (诱导系统发起 Bind)
+        hookPackageManager(lpparam.classLoader);
+        
+        // 4. 🔥 步骤二：Bind 拦截 (寄生到 MapService)
         hookBindService();
     }
+    
+    // 🔥 步骤一：PM 欺骗
+    private void hookPackageManager(ClassLoader cl) {
+        try {
+            XposedHelpers.findAndHookMethod("android.app.ApplicationPackageManager", cl, "queryIntentServices", Intent.class, int.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    Intent intent = (Intent) param.args[0];
+                    if (intent != null && intent.getComponent() != null && TARGET_SERVICE_IMPL.equals(intent.getComponent().getClassName())) {
+                        List<ResolveInfo> result = (List<ResolveInfo>) param.getResult();
+                        if (result == null) result = new ArrayList<>();
+                        
+                        if (result.isEmpty()) {
+                            // 伪造一份 ResolveInfo，告诉系统：服务存在，去 Bind 吧！
+                            ResolveInfo info = new ResolveInfo();
+                            info.serviceInfo = new ServiceInfo();
+                            info.serviceInfo.packageName = PKG_MAP;
+                            info.serviceInfo.name = TARGET_SERVICE_IMPL;
+                            info.serviceInfo.exported = true; // 必须是 exported
+                            info.serviceInfo.applicationInfo = new ApplicationInfo();
+                            info.serviceInfo.applicationInfo.packageName = PKG_MAP;
+                            result.add(info);
+                            param.setResult(result);
+                            sendJavaBroadcast("🎭 PM欺骗生效：伪造服务存在");
+                        }
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: PM Hook Error: " + t);
+        }
+    }
 
+    // 🔥 步骤二：Bind 寄生
+    private void hookBindService() {
+        try {
+            XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
+                Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                Intent intent = (Intent) param.args[0];
+                if (intent == null || intent.getComponent() == null) return;
+
+                String className = intent.getComponent().getClassName();
+                // 如果系统真的被 PM 欺骗了，发起了对 AutoSimilarWidgetService 的 Bind
+                if (TARGET_SERVICE_IMPL.equals(className)) {
+                    sendJavaBroadcast("👻 拦截 Bind，开始寄生...");
+                    
+                    // 1. 修改目标为真实的 MapService
+                    intent.setComponent(new ComponentName(PKG_MAP, HOST_SERVICE_IMPL));
+                    param.args[0] = intent;
+                    
+                    final ServiceConnection originalConn = (ServiceConnection) param.args[1];
+                    
+                    // 2. 包装回调
+                    ServiceConnection proxyConn = new ServiceConnection() {
+                        @Override
+                        public void onServiceConnected(ComponentName name, IBinder service) {
+                            sendJavaBroadcast("🔗 寄生连接建立，替换 FakeBinder");
+                            // 假装是原来的服务连上了
+                            ComponentName targetCn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
+                            if (originalConn != null) {
+                                originalConn.onServiceConnected(targetCn, fakeServiceBinder);
+                            }
+                            isConnected = true;
+                            // 立即激活
+                            if (mainHandler != null) {
+                                mainHandler.postDelayed(() -> triggerActivationSequence(), 200);
+                            }
+                        }
+
+                        @Override
+                        public void onServiceDisconnected(ComponentName name) {
+                            if (originalConn != null) originalConn.onServiceDisconnected(name);
+                        }
+                    };
+                    param.args[1] = proxyConn;
+                }
+            }
+        });
+        } catch (Throwable t) {
+             XposedBridge.log("NaviHook: Bind Hook Error: " + t);
+        }
+    }
+
+    // 🔥 步骤三：No-Token 握手
     private void initFakeBinder() {
         if (fakeServiceBinder != null) return;
         
@@ -118,16 +212,13 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
                 try {
-                    // 🔥🔥🔥 核心修改：彻底移除 Token 校验
-                    // data.enforceInterface(DESCRIPTOR_SERVICE); <-- 已删除
-                    
-                    // 尝试跳过 Token (如果存在)
+                    // ❌ 移除 Token 校验
+                    // 尝试跳过 Token
                     int startPos = data.dataPosition();
                     try {
                         String token = data.readString();
-                        // 如果读出来的不是我们预期的接口名，说明可能根本没发 Token，或者 Token 不一样
+                        // 如果 Token 为空或者不匹配，就回退指针
                         if (token == null || !token.contains("AutoSimilarWidget")) {
-                            // 回退指针，把它当参数读
                             data.setDataPosition(startPos);
                         }
                     } catch (Exception e) {
@@ -140,7 +231,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException(); 
                             
                             isConnected = true;
-                            sendJavaBroadcast("✅ 握手成功 (No-Token)");
+                            sendJavaBroadcast("✅ 握手成功");
                             
                             startHeartbeat();
                             if (mainHandler != null) {
@@ -155,9 +246,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                 if (hasSurface != 0) surface = Surface.CREATOR.createFromParcel(data);
                                 int id = data.readInt(); 
                                 sendJavaBroadcast("🎯 收到 Surface! ID=" + id);
-                            } catch (Exception e) {
-                                sendJavaBroadcast("❌ 解析 Surface 失败: " + e.getMessage());
-                            }
+                            } catch (Exception e) {}
                             
                             if (reply != null) reply.writeNoException();
                             
@@ -190,7 +279,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             if (reply != null) reply.writeNoException();
                             return true;
                             
-                        case 1598968902: // INTERFACE_TRANSACTION
+                        case 1598968902: 
                             if (reply != null) reply.writeString(DESCRIPTOR_SERVICE);
                             return true;
 
@@ -205,51 +294,42 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // 🔥 寄生策略
-    private void hookBindService() {
-        try {
-            XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
-                Intent.class, ServiceConnection.class, int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                Intent intent = (Intent) param.args[0];
-                if (intent == null || intent.getComponent() == null) return;
+    // 🔥 步骤四：激活序列 (Status 1 -> 3 -> 16)
+    private void triggerActivationSequence() {
+        new Thread(() -> {
+            try {
+                sendJavaBroadcast("🚀 激活序列...");
+                // 1. 初始化
+                injectMapStatusSingle(1); 
+                Thread.sleep(50);
+                
+                // 2. 前台
+                injectMapStatusSingle(3);
+                Thread.sleep(50);
+                
+                // 3. 切换布局
+                injectMapSwitchingInfo(5, 0); 
+                Thread.sleep(100);
+                
+                // 4. 导航数据
+                injectFullStatusSequence();
+                injectMapGuideInfo();
+            } catch (Throwable t) {}
+        }).start();
+    }
 
-                String className = intent.getComponent().getClassName();
-                if (TARGET_SERVICE_IMPL.equals(className)) {
-                    sendJavaBroadcast("👻 拦截 Bind，寄生启动...");
-                    
-                    // 指向真实存在的 MapService
-                    intent.setComponent(new ComponentName(PKG_MAP, HOST_SERVICE_IMPL));
-                    param.args[0] = intent;
-                    
-                    final ServiceConnection originalConn = (ServiceConnection) param.args[1];
-                    ServiceConnection proxyConn = new ServiceConnection() {
-                        @Override
-                        public void onServiceConnected(ComponentName name, IBinder service) {
-                            sendJavaBroadcast("🎭 寄生连接建立，替换 Binder");
-                            ComponentName targetCn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
-                            if (originalConn != null) {
-                                originalConn.onServiceConnected(targetCn, fakeServiceBinder);
-                            }
-                            isConnected = true;
-                            if (mainHandler != null) {
-                                mainHandler.postDelayed(() -> triggerActivationSequence(), 200);
-                            }
-                        }
-
-                        @Override
-                        public void onServiceDisconnected(ComponentName name) {
-                            if (originalConn != null) originalConn.onServiceDisconnected(name);
-                        }
-                    };
-                    param.args[1] = proxyConn;
-                }
+    // 辅助：手动触发广播 (点击按钮时)
+    private void performTrojanInjection() {
+        mainHandler.post(() -> {
+            try {
+                sendJavaBroadcast("🛠️ 触发模拟启动...");
+                Intent intent = new Intent("ecarx.intent.action.NAVI_SERVICE_STARTED");
+                intent.setPackage(PKG_SERVICE);
+                systemContext.sendBroadcast(intent);
+            } catch (Throwable t) {
+                sendJavaBroadcast("❌ 广播失败: " + t.getMessage());
             }
         });
-        } catch (Throwable t) { // 修复了这里缺少 catch 的问题
-             XposedBridge.log("NaviHook: Bind Hook Error: " + t);
-        }
     }
 
     private void hookConfigClasses(ClassLoader cl) {
@@ -302,36 +382,6 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {}
     }
-
-    private void triggerActivationSequence() {
-        new Thread(() -> {
-            try {
-                sendJavaBroadcast("🚀 激活序列...");
-                injectMapStatusSingle(1); 
-                Thread.sleep(50);
-                injectMapStatusSingle(3);
-                Thread.sleep(50);
-                injectMapSwitchingInfo(5, 0); 
-                Thread.sleep(100);
-                injectFullStatusSequence();
-                injectMapGuideInfo();
-            } catch (Throwable t) {}
-        }).start();
-    }
-
-    // 手动触发
-    private void performTrojanInjection() {
-        mainHandler.post(() -> {
-            try {
-                sendJavaBroadcast("🛠️ 触发模拟启动...");
-                Intent intent = new Intent("ecarx.intent.action.NAVI_SERVICE_STARTED");
-                intent.setPackage(PKG_SERVICE);
-                systemContext.sendBroadcast(intent);
-            } catch (Throwable t) {
-                sendJavaBroadcast("❌ 广播失败: " + t.getMessage());
-            }
-        });
-    }
     
     private void registerReceiver(Context context) {
         BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -369,10 +419,10 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> guideClass = XposedHelpers.findClass(CLASS_MAP_GUIDE_INFO, hostClassLoader);
             Object guideInfo = XposedHelpers.newInstance(guideClass, TARGET_VENDOR);
             setBaseMapVendor(guideInfo, TARGET_VENDOR); 
-            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V181 NoToken"); } catch (Throwable t) {}
-            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "Green Screen"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V182终极"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "缝合怪"); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "turnId", 2); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 555); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 888); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "remainDistance", 1000); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "remainTime", 60); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "guideType", 1); } catch (Throwable t) {}
@@ -417,7 +467,6 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> eventClass = XposedHelpers.findClass(CLASS_MAP_EVENT, hostClassLoader);
             Constructor<?> eventConstructor = eventClass.getConstructor(int.class, Object.class);
             Object event = eventConstructor.newInstance(type, eventObj);
-            
             Class<?> busClass = XposedHelpers.findClass(CLASS_EVENT_BUS, hostClassLoader);
             Object busInstance = XposedHelpers.callStaticMethod(busClass, "a");
             XposedHelpers.callMethod(busInstance, "a", event);
@@ -440,8 +489,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     c = surface.lockCanvas(null);
                 } catch (Exception e) { return; }
                 if (c != null) {
-                    c.drawColor(Color.GREEN); // 绿色 = 成功
-                    c.drawText("V181 NoToken", 50, 150, paint);
+                    c.drawColor(Color.rgb(255, 0, 255)); // 紫红色
+                    c.drawText("V182 Chimera", 50, 150, paint);
                     surface.unlockCanvasAndPost(c);
                 }
                 frame++;
@@ -471,11 +520,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         TextView tv = new TextView(getContext());
-                        tv.setText("V181-NoToken");
+                        tv.setText("V182-Chimera");
                         tv.setTextColor(Color.WHITE);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.GREEN); 
+                        tv.setBackgroundColor(Color.rgb(255, 0, 255)); 
                         setContentView(tv);
                     }
                 };
