@@ -83,7 +83,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V181 裸奔兼容版启动 (No-Token)");
+        XposedBridge.log("NaviHook: 🚀 V181 (Fix) 裸奔兼容版启动 (No-Token)");
 
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
@@ -107,7 +107,7 @@ public class MainHook implements IXposedHookLoadPackage {
         // 2. 解锁配置
         hookConfigClasses(lpparam.classLoader);
         
-        // 3. 拦截 Bind (继续使用寄生策略，因为这已被证明有效)
+        // 3. 拦截 Bind
         hookBindService();
     }
 
@@ -118,15 +118,16 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
                 try {
-                    // 🔥🔥🔥 核心修改：移除强制校验
-                    // data.enforceInterface(DESCRIPTOR_SERVICE); <-- 删掉这行！
+                    // 🔥🔥🔥 核心修改：彻底移除 Token 校验
+                    // data.enforceInterface(DESCRIPTOR_SERVICE); <-- 已删除
                     
                     // 尝试跳过 Token (如果存在)
                     int startPos = data.dataPosition();
                     try {
                         String token = data.readString();
-                        if (token == null || !token.equals(DESCRIPTOR_SERVICE)) {
-                            // 如果读出来的不是 Token，说明系统压根没发 Token，回退指针！
+                        // 如果读出来的不是我们预期的接口名，说明可能根本没发 Token，或者 Token 不一样
+                        if (token == null || !token.contains("AutoSimilarWidget")) {
+                            // 回退指针，把它当参数读
                             data.setDataPosition(startPos);
                         }
                     } catch (Exception e) {
@@ -204,7 +205,7 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // 🔥 寄生策略 (因为 9.1 确实没有 AutoSimilarWidgetService)
+    // 🔥 寄生策略
     private void hookBindService() {
         try {
             XposedHelpers.findAndHookMethod("android.content.ContextWrapper", null, "bindService",
@@ -246,6 +247,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             }
         });
+        } catch (Throwable t) { // 修复了这里缺少 catch 的问题
+             XposedBridge.log("NaviHook: Bind Hook Error: " + t);
+        }
     }
 
     private void hookConfigClasses(ClassLoader cl) {
@@ -291,9 +295,6 @@ public class MainHook implements IXposedHookLoadPackage {
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
-                // 系统发来的也没有 Token，我们发回去最好也不带，或者带上试试
-                // 为了保险，先不带 Token
-                // data.writeInterfaceToken(DESCRIPTOR_PROVIDER); 
                 systemProvider.transact(1, data, reply, 1); 
             } finally {
                 data.recycle();
@@ -368,8 +369,8 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> guideClass = XposedHelpers.findClass(CLASS_MAP_GUIDE_INFO, hostClassLoader);
             Object guideInfo = XposedHelpers.newInstance(guideClass, TARGET_VENDOR);
             setBaseMapVendor(guideInfo, TARGET_VENDOR); 
-            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V181裸奔"); } catch (Throwable t) {}
-            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "NoToken"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V181 NoToken"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "Green Screen"); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "turnId", 2); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 555); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "remainDistance", 1000); } catch (Throwable t) {}
