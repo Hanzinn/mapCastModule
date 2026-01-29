@@ -12,6 +12,7 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.RemoteException;
 import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -26,7 +27,7 @@ public class MainHook implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🕵️‍♂️ V180 (Fix) 中间人透明抓包版启动");
+        XposedBridge.log("NaviHook: 🕵️‍♂️ V180 (Final) 中间人透明抓包版启动");
 
         // 拦截 bindService，注入间谍
         XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "bindService",
@@ -83,20 +84,67 @@ public class MainHook implements IXposedHookLoadPackage {
             logTransaction(code, data);
 
             // 2. 转发给原始 Binder (送信)
+            // mOriginal.transact 可能会抛出 RemoteException，Binder.onTransact 允许抛出，所以这里不需要 try-catch
             return mOriginal.transact(code, data, reply, flags);
         }
 
-        // 实现 IBinder 的其他方法，全部转发
-        @Override public String getInterfaceDescriptor() throws RemoteException { return mOriginal.getInterfaceDescriptor(); }
-        @Override public boolean pingBinder() { return mOriginal.pingBinder(); }
-        @Override public boolean isBinderAlive() { return mOriginal.isBinderAlive(); }
-        @Override public IInterface queryLocalInterface(String descriptor) { return mOriginal.queryLocalInterface(descriptor); }
-        @Override public void dump(FileDescriptor fd, String[] args) throws RemoteException { mOriginal.dump(fd, args); }
-        @Override public void dumpAsync(FileDescriptor fd, String[] args) throws RemoteException { mOriginal.dumpAsync(fd, args); }
-        
-        // 修复：使用 IBinder.DeathRecipient 全名
-        @Override public void linkToDeath(IBinder.DeathRecipient recipient, int flags) throws RemoteException { mOriginal.linkToDeath(recipient, flags); }
-        @Override public boolean unlinkToDeath(IBinder.DeathRecipient recipient, int flags) { return mOriginal.unlinkToDeath(recipient, flags); }
+        // --- 修复部分：必须捕获 RemoteException 以匹配父类 Binder 的签名 ---
+
+        @Override 
+        public String getInterfaceDescriptor() { 
+            try {
+                return mOriginal.getInterfaceDescriptor(); 
+            } catch (RemoteException e) {
+                return null;
+            }
+        }
+
+        @Override 
+        public boolean pingBinder() { 
+            return mOriginal.pingBinder(); 
+        }
+
+        @Override 
+        public boolean isBinderAlive() { 
+            return mOriginal.isBinderAlive(); 
+        }
+
+        @Override 
+        public IInterface queryLocalInterface(String descriptor) { 
+            return mOriginal.queryLocalInterface(descriptor); 
+        }
+
+        @Override 
+        public void dump(FileDescriptor fd, String[] args) { 
+            try {
+                mOriginal.dump(fd, args); 
+            } catch (RemoteException e) {
+                // Ignore
+            }
+        }
+
+        @Override 
+        public void dumpAsync(FileDescriptor fd, String[] args) { 
+            try {
+                mOriginal.dumpAsync(fd, args); 
+            } catch (RemoteException e) {
+                // Ignore
+            }
+        }
+
+        @Override 
+        public void linkToDeath(IBinder.DeathRecipient recipient, int flags) { 
+            try {
+                mOriginal.linkToDeath(recipient, flags); 
+            } catch (RemoteException e) {
+                // Ignore
+            }
+        }
+
+        @Override 
+        public boolean unlinkToDeath(IBinder.DeathRecipient recipient, int flags) { 
+            return mOriginal.unlinkToDeath(recipient, flags); 
+        }
 
         private void logTransaction(int code, Parcel data) {
             // 忽略系统底层高频调用
