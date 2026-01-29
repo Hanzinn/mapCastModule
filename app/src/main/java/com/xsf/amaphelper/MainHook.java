@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Parcel;
@@ -25,7 +26,7 @@ public class MainHook implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
-        XposedBridge.log("NaviHook: 🕵️‍♂️ V180 中间人透明抓包版启动");
+        XposedBridge.log("NaviHook: 🕵️‍♂️ V180 (Fix) 中间人透明抓包版启动");
 
         // 拦截 bindService，注入间谍
         XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "bindService",
@@ -82,7 +83,6 @@ public class MainHook implements IXposedHookLoadPackage {
             logTransaction(code, data);
 
             // 2. 转发给原始 Binder (送信)
-            // 注意：因为 mOriginal 可能是 BinderProxy，不能直接调 onTransact，要调 transact
             return mOriginal.transact(code, data, reply, flags);
         }
 
@@ -93,8 +93,10 @@ public class MainHook implements IXposedHookLoadPackage {
         @Override public IInterface queryLocalInterface(String descriptor) { return mOriginal.queryLocalInterface(descriptor); }
         @Override public void dump(FileDescriptor fd, String[] args) throws RemoteException { mOriginal.dump(fd, args); }
         @Override public void dumpAsync(FileDescriptor fd, String[] args) throws RemoteException { mOriginal.dumpAsync(fd, args); }
-        @Override public void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException { mOriginal.linkToDeath(recipient, flags); }
-        @Override public boolean unlinkToDeath(DeathRecipient recipient, int flags) { return mOriginal.unlinkToDeath(recipient, flags); }
+        
+        // 修复：使用 IBinder.DeathRecipient 全名
+        @Override public void linkToDeath(IBinder.DeathRecipient recipient, int flags) throws RemoteException { mOriginal.linkToDeath(recipient, flags); }
+        @Override public boolean unlinkToDeath(IBinder.DeathRecipient recipient, int flags) { return mOriginal.unlinkToDeath(recipient, flags); }
 
         private void logTransaction(int code, Parcel data) {
             // 忽略系统底层高频调用
@@ -118,15 +120,13 @@ public class MainHook implements IXposedHookLoadPackage {
                         try {
                             sb.append(data.readInt()).append(", ");
                         } catch (Exception e) {
-                            // 如果读 Int 失败，可能是 String，尝试回退并读 String
-                            // 这里简单处理，读不出就算了
                             break; 
                         }
                     }
                 }
                 
                 // 如果是关键指令，尝试读 String
-                if (code == 2001) { // 怀疑是版本握手
+                if (code == 2001) { 
                     data.setDataPosition(startPos); // 回到开头
                     try { data.readString(); } catch(Exception e){} // 跳过 Token
                     try {
