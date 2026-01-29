@@ -42,12 +42,10 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String PKG_MAP = "com.autonavi.amapauto";
 
-    // 🎯 核心类
     private static final String CLASS_AMAP_AIDL_MANAGER = "ecarx.naviservice.map.amap.h";
     private static final String CLASS_MAP_MANAGER = "ecarx.naviservice.map.cf";
     private static final String CLASS_MAP_CONFIG_BASE = "ecarx.naviservice.map.co"; 
     
-    // 🎯 实体类
     private static final String CLASS_EVENT_BUS = "ecarx.naviservice.d.e";
     private static final String CLASS_MAP_STATUS_INFO = "ecarx.naviservice.map.entity.MapStatusInfo";
     private static final String CLASS_MAP_SWITCHING_INFO = "ecarx.naviservice.map.entity.MapSwitchingInfo";
@@ -68,7 +66,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static volatile long drawEpoch = 0;
     private static volatile int currentDynamicVendor = 5; 
     private static boolean isConnected = false;
-    private static Timer heartbeatTimer = null; // 💓 心跳定时器
+    private static Timer heartbeatTimer = null; 
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -79,9 +77,8 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals(PKG_SERVICE)) return;
 
         hostClassLoader = lpparam.classLoader;
-        XposedBridge.log("NaviHook: 🚀 V172 心跳数据泵版启动");
+        XposedBridge.log("NaviHook: 🚀 V173 前台强制置顶版启动");
 
-        // 1. 获取 Context
         XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
@@ -89,11 +86,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 mainHandler = new Handler(Looper.getMainLooper());
                 initFakeBinder(); 
                 registerReceiver(systemContext);
-                sendJavaBroadcast("⚡ V172 就绪");
+                sendJavaBroadcast("⚡ V173 就绪");
             }
         });
 
-        // 2. 动态 Hook Vendor
         try {
             Class<?> managerClass = XposedHelpers.findClassIfExists(CLASS_MAP_MANAGER, lpparam.classLoader);
             if (managerClass != null) {
@@ -106,10 +102,7 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {}
         
-        // 3. 解锁配置
         hookConfigClasses(lpparam.classLoader);
-        
-        // 4. 拦截 Bind
         hookBindService();
     }
     
@@ -136,14 +129,14 @@ public class MainHook implements IXposedHookLoadPackage {
                     data.enforceInterface(DESCRIPTOR_SERVICE);
 
                     switch (code) {
-                        case 4: // setWidgetStateControl (握手)
+                        case 4: // setWidgetStateControl
                             IBinder provider = data.readStrongBinder(); 
                             if (reply != null) reply.writeNoException(); 
                             
                             isConnected = true;
                             sendJavaBroadcast("✅ 握手成功");
                             
-                            // 启动心跳
+                            // 握手后，立刻启动心跳，心跳里包含前台指令
                             startHeartbeat();
                             
                             if (mainHandler != null) {
@@ -162,9 +155,8 @@ public class MainHook implements IXposedHookLoadPackage {
                             
                             sendJavaBroadcast("🎯 收到 Surface! ID=" + id);
                             
-                            // 🔥🔥🔥 关键：收到 Surface 后，立即再发一次激活指令
                             triggerHandoverSequence();
-                            startHeartbeat(); // 确保心跳在跳
+                            startHeartbeat(); 
                             
                             if (surface != null) {
                                 logSurfaceDetails(surface);
@@ -173,9 +165,8 @@ public class MainHook implements IXposedHookLoadPackage {
                             createOverlayWindow(); 
                             return true;
 
-                        case 2: // Code 2 (保持连接，不自杀)
+                        case 2: // Code 2 - 保持连接
                             if (reply != null) reply.writeNoException();
-                            // 不做任何操作，保持 surface 存活
                             return true;
 
                         case 3: // isMapRunning
@@ -201,22 +192,29 @@ public class MainHook implements IXposedHookLoadPackage {
         };
     }
     
-    // 💓 启动心跳数据泵：每秒发一次数据，确保 9.1 在任何时候切过来都有数据
+    // 💓 混合心跳：交替发送 "前台" 和 "导航中"
     private void startHeartbeat() {
-        if (heartbeatTimer != null) return; // 已经在跳了
+        if (heartbeatTimer != null) return;
         
-        sendJavaBroadcast("💓 启动心跳数据泵...");
+        sendJavaBroadcast("💓 启动前台心跳...");
         heartbeatTimer = new Timer();
         heartbeatTimer.schedule(new TimerTask() {
+            private int tick = 0;
             @Override
             public void run() {
-                // 只有在 Vendor 为 0 时才发数据
                 if (currentDynamicVendor == 0) {
-                    injectMapStatusSingle(16); // GUIDE_START
-                    injectMapGuideInfo();
+                    // 偶数秒发 前台(3)，奇数秒发 导航(16)
+                    // 强制刷存在感
+                    if (tick % 2 == 0) {
+                        injectMapStatusSingle(3); // MAP_STATUS_FOREGROUND
+                    } else {
+                        injectMapStatusSingle(16); // GUIDE_START
+                        injectMapGuideInfo();
+                    }
+                    tick++;
                 }
             }
-        }, 0, 1000); // 每秒一次
+        }, 0, 500); // 半秒一次，高频轰炸
     }
     
     private void stopHeartbeat() {
@@ -227,12 +225,10 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 🔥 强制注入 (Trojan)
     private void performTrojanInjection() {
         mainHandler.post(() -> {
             try {
                 sendJavaBroadcast("🛠️ 强制注入 (Trojan)...");
-                // 重置 Vendor，准备切换
                 currentDynamicVendor = 5; 
                 
                 Class<?> managerClass = XposedHelpers.findClass(CLASS_AMAP_AIDL_MANAGER, hostClassLoader);
@@ -243,9 +239,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     ServiceConnection conn = (ServiceConnection) connectionObj;
                     ComponentName fakeCn = new ComponentName(PKG_MAP, TARGET_SERVICE_IMPL);
                     conn.onServiceConnected(fakeCn, fakeServiceBinder);
-                    sendJavaBroadcast("💉 注入完成，等待响应...");
+                    sendJavaBroadcast("💉 注入完成");
                     
-                    // 注入后立即触发一次交接
                     mainHandler.postDelayed(() -> triggerHandoverSequence(), 500);
                 }
             } catch (Throwable t) {
@@ -291,7 +286,6 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             public void onReceive(Context ctx, Intent intent) {
                 if ("XSF_ACTION_START_CAST".equals(intent.getAction())) {
-                    // 无论是否已连接，点击按钮强制重置流程
                     isConnected = false; 
                     stopHeartbeat();
                     performTrojanInjection();
@@ -305,13 +299,24 @@ public class MainHook implements IXposedHookLoadPackage {
     private void triggerHandoverSequence() {
         new Thread(() -> {
             try {
-                sendJavaBroadcast("🚀 执行交接序列 (5->0)...");
+                sendJavaBroadcast("🚀 序列: 切换+前台+导航");
+                
+                // 1. 切布局
                 injectMapSwitchingInfo(5, 0);
                 Thread.sleep(100);
+                
                 currentDynamicVendor = 0;
-                sendJavaBroadcast("🦎 身份变更为 0");
+                
+                // 2. 🔥 关键：先发前台状态
+                injectMapStatusSingle(3); // Foreground
+                Thread.sleep(100);
+                
+                // 3. 再发导航状态
                 injectFullStatusSequence();
+                
+                // 4. 发数据
                 injectMapGuideInfo();
+                
             } catch (Throwable t) {}
         }).start();
     }
@@ -340,17 +345,16 @@ public class MainHook implements IXposedHookLoadPackage {
             Object guideInfo = XposedHelpers.newInstance(guideClass, 0);
             setBaseMapVendor(guideInfo, 0); 
             
-            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V172心跳版"); } catch (Throwable t) {}
-            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "数据泵运行中"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "curRoadName", "V173前台版"); } catch (Throwable t) {}
+            try { XposedHelpers.setObjectField(guideInfo, "nextRoadName", "强制显示"); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "turnId", 2); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 666); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "remainDistance", 2000); } catch (Throwable t) {}
-            try { XposedHelpers.setIntField(guideInfo, "remainTime", 120); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "nextTurnDistance", 555); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "remainDistance", 1000); } catch (Throwable t) {}
+            try { XposedHelpers.setIntField(guideInfo, "remainTime", 60); } catch (Throwable t) {}
             try { XposedHelpers.setIntField(guideInfo, "guideType", 1); } catch (Throwable t) {}
             try { XposedHelpers.setBooleanField(guideInfo, "isCustomTBTEnabled", true); } catch (Throwable t) {}
 
             postEvent(1002, guideInfo);
-            // sendJavaBroadcast("✅ GuideInfo Sent"); // 减少日志刷屏
             
         } catch (Throwable t) {
             sendJavaBroadcast("❌ GuideInfo: " + t.getMessage());
@@ -359,12 +363,14 @@ public class MainHook implements IXposedHookLoadPackage {
     
     private void injectFullStatusSequence() throws Exception {
         Class<?> statusClass = XposedHelpers.findClass(CLASS_MAP_STATUS_INFO, hostClassLoader);
-        int[] statuses = {7, 8, 12, 13, 14, 16}; 
-        sendJavaBroadcast("💉 注入完整状态流...");
+        // 增加 3 (前台)
+        int[] statuses = {3, 7, 8, 12, 13, 14, 16}; 
+        
         for (int s : statuses) {
             Object info = XposedHelpers.newInstance(statusClass, 0); 
             setBaseMapVendor(info, 0);
             XposedHelpers.setIntField(info, "status", s);
+            
             postEvent(1001, info);
             if (s == 16) postEvent(2002, info);
             Thread.sleep(50);
@@ -413,7 +419,7 @@ public class MainHook implements IXposedHookLoadPackage {
         new Thread(() -> {
             sendJavaBroadcast("🎨 启动绘制...");
             Paint paint = new Paint();
-            paint.setColor(Color.BLACK);
+            paint.setColor(Color.WHITE);
             paint.setTextSize(60);
             paint.setFakeBoldText(true);
             int frame = 0;
@@ -423,10 +429,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     c = surface.lockCanvas(null);
                 } catch (Exception e) { return; }
                 if (c != null) {
-                    c.drawColor(Color.CYAN); // 青色背景
-                    c.drawText("V172 Heartbeat", 50, 150, paint);
+                    c.drawColor(Color.MAGENTA); // 洋红色 = 前台模式
+                    c.drawText("V173 Foreground", 50, 150, paint);
                     surface.unlockCanvasAndPost(c);
-                    // if (frame == 1) sendJavaBroadcast("✅ 绘制成功");
                 }
                 frame++;
                 try { Thread.sleep(100); } catch (Exception e) {}
@@ -473,11 +478,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void onCreate(Bundle savedInstanceState) {
                         super.onCreate(savedInstanceState);
                         TextView tv = new TextView(getContext());
-                        tv.setText("V172-Heartbeat");
+                        tv.setText("V173-Foreground");
                         tv.setTextColor(Color.WHITE);
                         tv.setTextSize(50);
                         tv.setGravity(Gravity.CENTER);
-                        tv.setBackgroundColor(Color.CYAN); 
+                        tv.setBackgroundColor(Color.MAGENTA); 
                         setContentView(tv);
                     }
                 };
