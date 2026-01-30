@@ -1,4 +1,3 @@
-
 package com.xsf.amaphelper;
 
 import android.app.Application;
@@ -70,9 +69,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         XposedBridge.log("NaviHook: [Map] Service onCreate 拦截保护");
-                        // 如果原版代码有 bug (缺 AutoHelper)，这里如果不拦截可能会崩
-                        // 我们可以选择 param.setResult(null) 跳过原逻辑，或者 try-catch
-                        // 暂时先让它跑，如果崩了再完全替换
                     }
                 });
 
@@ -219,8 +215,6 @@ public class MainHook implements IXposedHookLoadPackage {
             Object internalConn = XposedHelpers.getObjectField(dashboardMgr, "f");
             if (internalConn != null) {
                 // 把我们的 TrojanBinder 塞给系统管理器
-                // 系统随后会调用 binder.addSurface(43)
-                // 这个调用会直接走进 TrojanBinder.onTransact -> injectNativeEngine
                 ComponentName fakeCn = new ComponentName(PKG_MAP, TARGET_SERVICE);
                 Method onConnected = internalConn.getClass().getMethod("onServiceConnected", ComponentName.class, IBinder.class);
                 onConnected.invoke(internalConn, fakeCn, binder);
@@ -262,5 +256,25 @@ public class MainHook implements IXposedHookLoadPackage {
         }, filter);
     }
 
-    private void sendJavaBroadcast(String log) { if (sysContext == null) return; new Thread(() -> { try { Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE"); i.setPackage(PKG_SELF); i.putExtra("log", log); i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES); try { Object userAll = XposedHelpers.getStaticObjectField(UserHandle.class, "ALL"); Method method = Context.class.getMethod("sendBroadcastAsUser", Intent.class, UserHandle.class); method.invoke(sysContext, i, userAll); } catch (Throwable t) { sysContext.sendBroadcast(i); } } catch (Throwable t) {} }).start(); }
+    // 🔥 修复点：改用纯反射调用 UserHandle，解决编译报错
+    private void sendJavaBroadcast(String log) {
+        if (sysContext == null) return;
+        new Thread(() -> {
+            try {
+                Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
+                i.setPackage(PKG_SELF);
+                i.putExtra("log", log);
+                i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                try {
+                    // 使用反射获取 UserHandle.class，避免编译时找不到符号
+                    Class<?> userHandleClass = Class.forName("android.os.UserHandle");
+                    Object userAll = XposedHelpers.getStaticObjectField(userHandleClass, "ALL");
+                    Method method = Context.class.getMethod("sendBroadcastAsUser", Intent.class, userHandleClass);
+                    method.invoke(sysContext, i, userAll);
+                } catch (Throwable t) {
+                    sysContext.sendBroadcast(i);
+                }
+            } catch (Throwable t) {}
+        }).start();
+    }
 }
