@@ -1,9 +1,11 @@
 package com.xsf.amaphelper;
 
 import android.app.Application;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
@@ -48,11 +50,8 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        // =============================================================
-        // 🏰 战场 A：高德地图进程（版本检测修复）
-        // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 🔥 方案：Hook Application.onCreate 获取版本信息（此时类已加载）
+            // 延迟到 Application.onCreate 再判断版本
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
@@ -62,9 +61,6 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         }
 
-        // =============================================================
-        // 🚗 战场 B：车机系统进程
-        // =============================================================
         if (lpparam.packageName.equals(PKG_SERVICE)) {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
@@ -85,27 +81,23 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 🔥 修复：延迟到 Application.onCreate 后再检测版本
     private void determineVersionAndHook(Context ctx, ClassLoader cl) {
         try {
             PackageInfo info = ctx.getPackageManager().getPackageInfo(PKG_MAP, 0);
             String versionName = info.versionName;
-            long versionCode = info.getLongVersionCode();
             
-            XposedBridge.log("NaviHook: [Map] App version: " + versionName + " (" + versionCode + ")");
+            XposedBridge.log("NaviHook: [Map] Version: " + versionName);
             
-            // 7.5 判断：版本号以 7.5 或 7. 开头
             boolean isLegacy75 = versionName != null && (versionName.startsWith("7.5") || versionName.startsWith("7."));
             
-            // 备选：如果版本号判断失败，再试类检测（此时类可能已加载）
             if (!isLegacy75) {
                 isLegacy75 = XposedHelpers.findClassIfExists("com.AutoHelper", cl) != null;
             }
             
             if (isLegacy75) {
-                XposedBridge.log("NaviHook: [Map] ✅ 确认为 7.5，不植入 TrojanBinder");
+                XposedBridge.log("NaviHook: [Map] ✅ 7.5 detected, no hook");
             } else {
-                XposedBridge.log("NaviHook: [Map] ⚡ 确认为 9.1，植入 TrojanBinder");
+                XposedBridge.log("NaviHook: [Map] ⚡ 9.1 detected, injecting TrojanBinder");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, cl, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
@@ -114,17 +106,14 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                     });
                 } catch (Throwable t) {
-                    XposedBridge.log("NaviHook: [Map] Hook 失败: " + t);
+                    XposedBridge.log("NaviHook: [Map] Hook failed: " + t);
                 }
             }
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: [Map] 版本检测失败: " + t);
+            XposedBridge.log("NaviHook: [Map] Version check failed: " + t);
         }
     }
 
-    // =============================================================
-    // 🦄 特洛伊 Binder（修复 hexDump，去掉 readBytes）
-    // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
         private boolean isSurfaceActive = false;
@@ -141,10 +130,9 @@ public class MainHook implements IXposedHookLoadPackage {
             try {
                 int dataSize = data.dataSize();
                 
-                // 🔥 修复：不用 readBytes，手动读取前16字节
                 StringBuilder hexDump = new StringBuilder();
                 int startPos = data.dataPosition();
-                for (int i = 0; i < 8 && i < dataSize; i++) { // 读8个int（32字节）或更少
+                for (int i = 0; i < 4 && i < dataSize/4; i++) {
                     try {
                         int val = data.readInt();
                         hexDump.append(String.format("%08X ", val));
@@ -159,7 +147,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     code, dataSize, hexDump.toString()
                 ));
 
-                // Code 4: 握手
                 if (code == 4) {
                     XposedBridge.log("NaviHook: [Binder] 🎯 Code 4 = Handshake");
                     try {
@@ -170,10 +157,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     return true;
                 }
                 
-                // Code 1: 投屏或心跳
                 if (code == 1) {
-                    if (dataSize > 100 && !isSurfaceActive) {
-                        XposedBridge.log("NaviHook: [Binder] 🎯 Code 1 = AddSurface (large packet)");
+                    if (dataSize > 80 && !isSurfaceActive) {
+                        XposedBridge.log("NaviHook: [Binder] 🎯 Code 1 = AddSurface (large)");
                         
                         data.setDataPosition(0);
                         Surface surface = null;
@@ -191,20 +177,21 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
 
                         if (surface != null && surface.isValid()) {
-                            XposedBridge.log("NaviHook: [Binder] ✅ Surface valid!");
+                            XposedBridge.log("NaviHook: [Binder] ✅ Surface captured");
                             final Surface s = surface;
                             uiHandler.post(() -> injectNativeEngine(s));
                             isSurfaceActive = true;
+                        } else {
+                            XposedBridge.log("NaviHook: [Binder] ❌ Surface invalid");
                         }
                     } else {
-                        XposedBridge.log("NaviHook: [Binder] 💓 Code 1 = Heartbeat (small)");
+                        XposedBridge.log("NaviHook: [Binder] 💓 Code 1 = Heartbeat");
                     }
                     
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
 
-                // Code 2: 重置
                 if (code == 2) {
                     XposedBridge.log("NaviHook: [Binder] 🎯 Code 2 = Reset");
                     isSurfaceActive = false;
@@ -237,7 +224,6 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 其他方法保持不变...
     private void hookPackageManager(ClassLoader cl) {
         XC_MethodHook spoofHook = new XC_MethodHook() {
             @SuppressWarnings("unchecked")
@@ -348,7 +334,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private void startStatusHeartbeat(boolean isLoop) {
-        stopStatusHeartbeat();
+        if (statusHeartbeat != null) statusHeartbeat.cancel();
         
         statusHeartbeat = new Timer();
         statusHeartbeat.schedule(new TimerTask() {
@@ -372,21 +358,18 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 1000, isLoop ? 3000 : 9999999);
     }
     
-    private void stopStatusHeartbeat() {
-        if (statusHeartbeat != null) {
-            statusHeartbeat.cancel();
-            statusHeartbeat = null;
-        }
-    }
-    
     private void registerStopReceiver() {
         try {
+            IntentFilter filter = new IntentFilter("com.xsf.amaphelper.STOP_HEARTBEAT");
             sysContext.registerReceiver(new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context context, Intent intent) {
-                    stopStatusHeartbeat();
+                    if (statusHeartbeat != null) {
+                        statusHeartbeat.cancel();
+                        statusHeartbeat = null;
+                    }
                 }
-            }, new IntentFilter("com.xsf.amaphelper.STOP_HEARTBEAT"));
+            }, filter);
         } catch (Throwable t) {}
     }
 }
