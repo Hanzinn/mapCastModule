@@ -37,7 +37,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Object dashboardMgr;
     private static boolean isConnected = false;
     
-    // 7.5 独有的特征类 (最稳的指纹)
+    // 7.5 独有的特征类
     private static final String LEGACY_75_HELPER = "com.AutoHelper";
 
     @Override
@@ -51,17 +51,17 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 🔥 步骤 1：指纹识别 (回归最稳的判断)
+            // 🔥 步骤 1：指纹识别 (7.5 有 AutoHelper，9.1 没有)
             boolean is75 = XposedHelpers.findClassIfExists(LEGACY_75_HELPER, lpparam.classLoader) != null;
             if (is75) {
                 XposedBridge.log("NaviHook: [Map] ⚠️ 发现 com.AutoHelper，确认为 7.5，停止 Hook。");
-                return; // 7.5 直接退出，让原生代码工作
+                return; // 7.5 直接退出
             }
 
             XposedBridge.log("NaviHook: [Map] ✅ 未发现 AutoHelper，确认为 9.1，准备注入...");
             
             try {
-                // Hook 9.1 的 Service，植入特洛伊木马
+                // Hook 9.1 Service
                 XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
@@ -70,7 +70,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
                 
-                // 保护性 Hook，防止 9.1 原生代码空指针
+                // 保护性 Hook
                 XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onCreate", new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
@@ -116,7 +116,7 @@ public class MainHook implements IXposedHookLoadPackage {
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
-        private boolean surfaceInjected = false; // 🔥 防闪烁的关键锁
+        private boolean surfaceInjected = false; // 🔥 防闪烁锁
         
         public TrojanBinder(ClassLoader cl) {
             this.classLoader = cl;
@@ -131,14 +131,14 @@ public class MainHook implements IXposedHookLoadPackage {
                     return true;
                 }
                 
-                // 2. Surface 传输 (Code 4 或 43) - 这才是真正的投屏指令
+                // 2. Surface 传输 (Code 4 或 43)
                 if (code == 4 || code == 43) {
-                    // 🔥 探针：打印数据包大小，确认是否有干货
+                    // 探针：打印数据包大小
                     int size = data.dataSize();
-                    XposedBridge.log("NaviHook: [Binder] 🔥 收到 Code " + code + " | DataSize: " + size);
+                    XposedBridge.log("NaviHook: [Binder] 🔥 收到 Code " + code + " | Size: " + size);
 
                     if (surfaceInjected) {
-                        XposedBridge.log("NaviHook: [Binder] Surface 已注入过，跳过 (防闪烁)");
+                        XposedBridge.log("NaviHook: [Binder] Surface 已注入，防闪烁跳过");
                         if (reply != null) reply.writeNoException();
                         return true; 
                     }
@@ -146,43 +146,35 @@ public class MainHook implements IXposedHookLoadPackage {
                     data.setDataPosition(0);
                     try { data.readString(); } catch(Exception e){} // Skip Token
                     
-                    // 尝试读取 Surface
-                    // 根据经验，如果 dataSize > 100 且有 Binder/FileDescriptor，基本就是 Surface
                     if (data.readInt() != 0) {
                         Surface surface = Surface.CREATOR.createFromParcel(data);
                         if (surface != null && surface.isValid()) {
                             XposedBridge.log("NaviHook: [Binder] 🔥 捕获有效 Surface! 注入引擎...");
                             injectNativeEngine(surface);
-                            surfaceInjected = true; // 🔒 锁定，防止重复注入
-                        } else {
-                            XposedBridge.log("NaviHook: [Binder] ❌ Surface 对象无效");
+                            surfaceInjected = true; // 🔒 锁定
                         }
-                    } else {
-                        XposedBridge.log("NaviHook: [Binder] ❌ 数据头为空 (ReadInt=0)");
                     }
                     
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
                 
-                // 3. 心跳/注册 (Code 1) - 9.1 日志里频繁出现
+                // 3. 心跳/注册 (Code 1) - 维持连接
                 if (code == 1) {
-                    // 只是应答，不做操作，维持连接不报错
-                    // XposedBridge.log("NaviHook: [Binder] Code 1 (Heartbeat) - Ack");
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
                 
-                // 4. 断开/移除 (Code 2) - 重置状态
+                // 4. 断开/移除 (Code 2) - 重置锁
                 if (code == 2) {
-                    XposedBridge.log("NaviHook: [Binder] 收到移除指令 (Code 2)，重置锁");
-                    surfaceInjected = false; // 🔓 解锁，允许下次注入
+                    XposedBridge.log("NaviHook: [Binder] 收到 Code 2 (Reset)");
+                    surfaceInjected = false; // 🔓 解锁
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
                 
                 // 捕获其他未知 Code
-                if (code != 1598968902) { // 忽略 INTERFACE_TRANSACTION
+                if (code != 1598968902) { 
                     XposedBridge.log("NaviHook: [Binder] 未知 Code: " + code);
                 }
                 
@@ -322,5 +314,28 @@ public class MainHook implements IXposedHookLoadPackage {
         }, filter);
     }
 
-    private void sendJavaBroadcast(String log) { if (sysContext == null) return; new Thread(() -> { try { Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE"); i.setPackage(PKG_SELF); i.putExtra("log", log); i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES); try { Object userAll = XposedHelpers.getStaticObjectField(UserHandle.class, "ALL"); Method method = Context.class.getMethod("sendBroadcastAsUser", Intent.class, UserHandle.class); method.invoke(sysContext, i, userAll); } catch (Throwable t) { sysContext.sendBroadcast(i); } } catch (Throwable t) {} }).start(); }
+    // 🌟 修复版广播发送：使用 Class.forName 避免编译错误
+    private void sendJavaBroadcast(String log) {
+        // 先打印到 Xposed 日志，确保不丢信息
+        XposedBridge.log("NaviHook: " + log);
+        
+        if (sysContext == null) return;
+        new Thread(() -> {
+            try {
+                Intent i = new Intent("com.xsf.amaphelper.LOG_UPDATE");
+                i.setPackage(PKG_SELF);
+                i.putExtra("log", log);
+                i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                try {
+                    // 使用纯反射加载 UserHandle，绕过编译器检查
+                    Class<?> userHandleClass = Class.forName("android.os.UserHandle");
+                    Object userAll = XposedHelpers.getStaticObjectField(userHandleClass, "ALL");
+                    Method method = Context.class.getMethod("sendBroadcastAsUser", Intent.class, userHandleClass);
+                    method.invoke(sysContext, i, userAll);
+                } catch (Throwable t) {
+                    sysContext.sendBroadcast(i);
+                }
+            } catch (Throwable t) {}
+        }).start();
+    }
 }
