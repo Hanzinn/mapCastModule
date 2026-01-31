@@ -34,12 +34,17 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SERVICE = "ecarx.naviservice";
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String TARGET_SERVICE = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
-    private static final String ACTION_STOP_HEARTBEAT = "com.xsf.amaphelper.STOP_HEARTBEAT";
+    
+    // 广播动作：用于 Map 告诉 System 真实版本
+    private static final String ACTION_VERSION_CHECK = "com.xsf.amaphelper.VERSION_CHECK";
 
     private static Context sysContext;
     private static Handler sysHandler;
     private static Object dashboardMgr;
     private static Timer statusHeartbeat;
+    
+    // System 侧状态
+    private static boolean isSystemReady = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -52,15 +57,27 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 7.5 和 9.1 的分流判断
+            // 1. 版本检测
             boolean isLegacy75 = XposedHelpers.findClassIfExists("com.AutoHelper", lpparam.classLoader) != null;
             
+            // 2. 无论 7.5 还是 9.1，都 Hook Application 发出通知
+            XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    Context ctx = (Context) param.thisObject;
+                    // 延时一下确保 System 侧已注册广播
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                        sendVersionBroadcast(ctx, isLegacy75);
+                    }, 5000);
+                    // 立即发一次
+                    sendVersionBroadcast(ctx, isLegacy75);
+                }
+            });
+
             if (isLegacy75) {
-                // 【7.5 策略】绝对不 Hook onBind，防止双重 Binder 冲突
-                XposedBridge.log("NaviHook: [Map] ⚠️ 识别为 7.5。保留原生 Binder，不进行植入。");
+                XposedBridge.log("NaviHook: [Map] ⚠️ 识别为 7.5，不植入 Binder。");
             } else {
-                // 【9.1 策略】Hook onBind，植入 V208 暴力解析版
-                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1。植入 V208 Brute-Force Binder。");
+                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V209 增强版 Binder。");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
@@ -70,13 +87,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     });
                 } catch (Throwable t) {}
             }
-            
-            // 防御性 Hook
-            try {
-                XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onCreate", new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam param) {}
-                });
-            } catch (Throwable t) {}
         }
 
         // =============================================================
@@ -88,13 +98,21 @@ public class MainHook implements IXposedHookLoadPackage {
                 protected void afterHookedMethod(MethodHookParam param) {
                     sysContext = (Context) param.thisObject;
                     sysHandler = new Handler(Looper.getMainLooper());
-                    registerStopReceiver();
-                    sysHandler.postDelayed(() -> initSystemEnvironment(lpparam.classLoader), 5000);
+                    
+                    // 注册广播接收器，等待 Map 告诉我们版本
+                    registerVersionReceiver();
+                    
+                    // 兜底策略：如果 10秒 还没收到广播，强制按 9.1 启动 (为了解决你的问题)
+                    sysHandler.postDelayed(() -> {
+                        if (!isSystemReady) {
+                            XposedBridge.log("NaviHook: [Sys] ⚠️ 等待超时，强制切换为 9.1 激活模式！");
+                            initAs91();
+                        }
+                    }, 10000);
                 }
             });
 
             hookPackageManager(lpparam.classLoader);
-
             try {
                 Class<?> cfg = XposedHelpers.findClassIfExists("ecarx.naviservice.map.co", lpparam.classLoader);
                 if (cfg != null) XposedHelpers.findAndHookMethod(cfg, "g", XC_MethodReplacement.returnConstant(true));
@@ -102,8 +120,59 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    // 发送版本广播
+    private void sendVersionBroadcast(Context ctx, boolean is75) {
+        try {
+            Intent intent = new Intent(ACTION_VERSION_CHECK);
+            intent.setPackage(PKG_SERVICE); // 指定发给系统进程
+            intent.putExtra("is_75", is75);
+            ctx.sendBroadcast(intent);
+            XposedBridge.log("NaviHook: [Map] 📢 发送版本广播: " + (is75 ? "7.5" : "9.1"));
+        } catch (Throwable t) {}
+    }
+
+    // 接收版本广播
+    private void registerVersionReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_VERSION_CHECK);
+        sysContext.registerReceiver(new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (isSystemReady) return; // 避免重复初始化
+                boolean is75 = intent.getBooleanExtra("is_75", false);
+                XposedBridge.log("NaviHook: [Sys] 📩 收到 Map 广播，确认为: " + (is75 ? "7.5" : "9.1"));
+                
+                if (is75) {
+                    initAs75();
+                } else {
+                    initAs91();
+                }
+                isSystemReady = true;
+            }
+        }, filter);
+    }
+
+    private void initAs75() {
+        XposedBridge.log("NaviHook: [Sys] 启动 7.5 兼容模式 (仅心跳)");
+        initDashboardMgr();
+        startStatusHeartbeat(true);
+    }
+
+    private void initAs91() {
+        XposedBridge.log("NaviHook: [Sys] 启动 9.1 增强模式 (Bind + 激活)");
+        initDashboardMgr();
+        bindToMapService();
+        startStatusHeartbeat(false);
+    }
+    
+    private void initDashboardMgr() {
+        try {
+            Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", sysContext.getClassLoader());
+            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
+        } catch (Throwable t) {}
+    }
+
     // =============================================================
-    // 🦄 V208 特洛伊 Binder (暴力解析版)
+    // 🦄 V209 TrojanBinder (Offset 128)
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
@@ -120,40 +189,39 @@ public class MainHook implements IXposedHookLoadPackage {
             try {
                 int dataSize = data.dataSize();
                 
-                // 🔥 策略：无论 Code 是多少 (1, 2, 4, 43)，只要包够大，就说明里面藏着 Surface
-                // 你的日志证明 Code 2 大小为 248，这就是我们要找的！
-                if (dataSize > 100) {
+                // Code 4 (148 bytes) 是握手包，没有 Surface，直接忽略，避免刷屏报错
+                if (code == 4) {
+                    if (reply != null) reply.writeNoException();
+                    return true;
+                }
+
+                // 只有大包 (248 bytes) 才是 Surface
+                if (dataSize > 200 && (code == 1 || code == 2 || code == 43)) {
                     
                     if (isSurfaceActive && code == 1) {
-                         // 已经激活了，Code 1 可能是后续更新，忽略以防闪烁
                          if (reply != null) reply.writeNoException();
                          return true;
                     }
 
-                    XposedBridge.log("NaviHook: [Binder] 🔍 收到大包 Code " + code + " (Size=" + dataSize + ")，尝试暴力破解...");
+                    XposedBridge.log("NaviHook: [Binder] 🔍 解析 Code " + code + " (Size=" + dataSize + ")...");
                     
-                    // 调用暴力解析器
-                    Surface surface = tryBruteForceParse(data);
+                    // 增强版暴力解析
+                    Surface surface = tryExtendedBruteForce(data);
                     
                     if (surface != null && surface.isValid()) {
-                        XposedBridge.log("NaviHook: [Binder] ✅✅✅ 破解成功！在 Code " + code + " 中找到 Surface！");
-                        XposedBridge.log("NaviHook: [Binder] 🚀 立即注入引擎...");
-                        
+                        XposedBridge.log("NaviHook: [Binder] ✅✅✅ 成功挖到 Surface！立即注入！");
                         final Surface s = surface;
                         uiHandler.post(() -> injectNativeEngine(s));
-                        
                         isSurfaceActive = true;
                     } else {
-                         XposedBridge.log("NaviHook: [Binder] ❌ 解析失败，可能不是 Surface 包");
+                         XposedBridge.log("NaviHook: [Binder] ❌ 解析失败 (已尝试 0-128 字节)");
                     }
                     
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
                 
-                // 处理明确的 Reset 指令 (Code 2 且包很小的时候)
-                if (code == 2 && dataSize < 50) { 
-                    XposedBridge.log("NaviHook: [Binder] 收到 Reset 指令");
+                if (code == 2 && dataSize < 100) { 
                     isSurfaceActive = false;
                     if (reply != null) reply.writeNoException();
                     return true;
@@ -169,31 +237,24 @@ public class MainHook implements IXposedHookLoadPackage {
             return true;
         }
 
-        // 🔥🔥🔥 核心：暴力解析器 (Brute Force Parser)
-        // 它的作用是不管包头是什么，从第 0 个字节开始往后试，直到读出 Surface 为止
-        private Surface tryBruteForceParse(Parcel data) {
+        // 🔥🔥🔥 升级版暴力解析：范围更大
+        private Surface tryExtendedBruteForce(Parcel data) {
             int originalPos = data.dataPosition();
             
-            // 尝试这些常见偏移量 (跳过 InterfaceToken)
-            // 0, 4, 8 ... 40
-            int[] offsets = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40};
-            
-            for (int offset : offsets) {
+            // 尝试从 0 到 128 字节，每 4 字节一跳
+            // 这样能跳过超长的 Interface Token
+            for (int offset = 0; offset <= 128; offset += 4) {
                 if (offset >= data.dataSize()) break;
                 try {
                     data.setDataPosition(offset);
-                    // 尝试读取
                     Surface s = Surface.CREATOR.createFromParcel(data);
                     if (s != null && s.isValid()) {
-                        XposedBridge.log("NaviHook: [Binder] 🔓 在 Offset " + offset + " 处成功读取 Surface！");
+                        XposedBridge.log("NaviHook: [Binder] 🔓 Offset " + offset + " 命中！");
                         return s;
                     }
-                } catch (Throwable e) {
-                    // 读错了会报错，忽略，继续试下一个
-                }
+                } catch (Throwable e) {}
             }
             
-            // 恢复指针
             data.setDataPosition(originalPos);
             return null;
         }
@@ -201,20 +262,15 @@ public class MainHook implements IXposedHookLoadPackage {
         private void injectNativeEngine(Surface surface) {
             try {
                 Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", classLoader);
-                // 参数：1=仪表DisplayID, 2=SurfaceType, surface
                 Method m = XposedHelpers.findMethodExact(cls, "nativeSurfaceCreated", int.class, int.class, Surface.class);
                 m.invoke(null, 1, 2, surface);
                 XposedBridge.log("NaviHook: [Map] ✅ Native 引擎调用完成");
             } catch (Throwable t) { 
-                XposedBridge.log("NaviHook: [Map] ❌ 注入异常: " + t);
                 isSurfaceActive = false; 
             }
         }
     }
 
-    // =============================================================
-    // 🛠️ PM 欺骗 (7.5)
-    // =============================================================
     private void hookPackageManager(ClassLoader cl) {
         XC_MethodHook spoofHook = new XC_MethodHook() {
             @SuppressWarnings("unchecked")
@@ -255,30 +311,6 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // =============================================================
-    // 📡 系统侧逻辑
-    // =============================================================
-    private void initSystemEnvironment(ClassLoader cl) {
-        try {
-            Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
-            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
-            Object conn = null;
-            try { conn = XposedHelpers.getObjectField(dashboardMgr, "f"); } catch (Throwable t) {}
-            
-            // 7.5 判定逻辑：如果有连接，说明是 7.5 原生
-            if (conn != null) {
-                XposedBridge.log("NaviHook: [Sys] ✅ 判定为 7.5 原生模式，仅启动心跳。");
-                startStatusHeartbeat(true); 
-            } else {
-                XposedBridge.log("NaviHook: [Sys] ❌ 判定为 9.1 模式，执行 Bind。");
-                bindToMapService();
-                startStatusHeartbeat(false); 
-            }
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: [Sys] 初始化错误: " + t);
-        }
-    }
-
     private void bindToMapService() {
         if (sysContext == null) return;
         sysHandler.post(() -> {
@@ -307,7 +339,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private void startStatusHeartbeat(boolean isLoop) {
-        stopStatusHeartbeat();
+        if (statusHeartbeat != null) statusHeartbeat.cancel();
         statusHeartbeat = new Timer();
         statusHeartbeat.schedule(new TimerTask() {
             @Override
@@ -328,26 +360,5 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Throwable t) {}
             }
         }, 1000, isLoop ? 3000 : 9999999);
-    }
-    
-    private void stopStatusHeartbeat() {
-        if (statusHeartbeat != null) {
-            statusHeartbeat.cancel();
-            statusHeartbeat = null;
-        }
-    }
-
-    private void registerStopReceiver() {
-        try {
-            IntentFilter filter = new IntentFilter(ACTION_STOP_HEARTBEAT);
-            sysContext.registerReceiver(new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    if (ACTION_STOP_HEARTBEAT.equals(intent.getAction())) {
-                        stopStatusHeartbeat();
-                    }
-                }
-            }, filter);
-        } catch (Throwable t) {}
     }
 }
