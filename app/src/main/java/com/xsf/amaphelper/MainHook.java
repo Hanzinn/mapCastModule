@@ -48,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 1. 分辨率 Hook (V213 验证成功)
+            // 1. 分辨率 Hook
             hookSurfaceDimensions(lpparam.classLoader);
 
             // 2. 版本检测广播
@@ -64,7 +64,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
             // 3. 9.1 植入 TrojanBinder
             if (!isLegacy75) {
-                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V214 (修复版) Binder。");
+                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V215 (编译修复版) Binder。");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
@@ -105,7 +105,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 📡 连接与注入逻辑 (V214 修复 System 注入崩溃)
+    // 📡 连接与注入逻辑
     // =============================================================
     private void bindToMapService() {
         if (sysContext == null) return;
@@ -130,15 +130,14 @@ public class MainHook implements IXposedHookLoadPackage {
             if (dashboardMgr == null) return;
             Object internalConn = XposedHelpers.getObjectField(dashboardMgr, "f");
             if (internalConn != null) {
-                // 🔥 V214 修复：不再通过 getMethod 获取，而是遍历所有方法找到 onServiceConnected
-                // 解决 NoSuchMethodException 问题
+                // 遍历方法找到 onServiceConnected，防止参数签名不匹配导致崩溃
                 boolean injected = false;
                 for (Method m : internalConn.getClass().getMethods()) {
                     if (m.getName().equals("onServiceConnected")) {
                         try {
                             m.setAccessible(true);
                             m.invoke(internalConn, new ComponentName(PKG_MAP, TARGET_SERVICE), binder);
-                            XposedBridge.log("NaviHook: [Sys] ✅✅✅ 注入 Dashboard 成功 (Via Reflection Scan)");
+                            XposedBridge.log("NaviHook: [Sys] ✅✅✅ 注入 Dashboard 成功 (Reflection Scan)");
                             injected = true;
                             triggerWakeUp();
                             break;
@@ -168,7 +167,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 🦄 V214 TrojanBinder (修复 Redraw 参数)
+    // 🦄 V215 TrojanBinder (编译修复)
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
@@ -241,20 +240,20 @@ public class MainHook implements IXposedHookLoadPackage {
             try {
                 Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", classLoader);
                 
-                // 1. 调用 nativeSurfaceCreated (已成功)
+                // 1. 调用 nativeSurfaceCreated
                 Method mCreate = XposedHelpers.findMethodExact(cls, "nativeSurfaceCreated", int.class, int.class, Surface.class);
                 mCreate.invoke(null, 1, 2, surface);
                 XposedBridge.log("NaviHook: [Map] ✅ Created 调用成功");
 
-                // 2. 🔥 V214 修复：调用 RedrawNeeded，传入 Surface！
-                // 根据报错 argument 2 is Surface，签名应该是 (int, int, Surface)
+                // 2. 调用 RedrawNeeded
                 try {
                     Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class, Surface.class);
                     mRedraw.invoke(null, 1, 2, surface);
                     XposedBridge.log("NaviHook: [Map] ✅✅✅ RedrawNeeded (带Surface) 调用成功！");
-                } catch (NoSuchMethodException e) {
-                    // 如果不是3个参数，尝试2个参数的备选方案
-                    XposedBridge.log("NaviHook: [Map] ⚠️ 3参数 Redraw 不存在，尝试无参...");
+                } catch (Throwable t) { 
+                    // 🔥 编译错误修复：NoSuchMethodException 是受检异常，必须 catch (Throwable) 或 (Exception)
+                    // 因为 XposedHelpers 可能会抛出 Error
+                    XposedBridge.log("NaviHook: [Map] ⚠️ 3参数 Redraw 不存在，尝试兜底方案...");
                     for (Method m : cls.getDeclaredMethods()) {
                         if (m.getName().equals("nativeSurfaceRedrawNeeded")) {
                             m.setAccessible(true);
