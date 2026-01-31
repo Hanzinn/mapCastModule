@@ -48,15 +48,14 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 1. Hook 分辨率查询方法 (V211 核心修复)
-            // 引擎会反向调用这些方法来决定画多大，我们直接欺骗它
+            // 1. Hook 分辨率查询方法 (核心修复)
             hookSurfaceDimensions(lpparam.classLoader);
 
             // 2. 版本检测与广播
             boolean isLegacy75 = XposedHelpers.findClassIfExists("com.AutoHelper", lpparam.classLoader) != null;
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
-                protected void afterHookedMethod(MethodHookParam param) {
+                protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) {
                     Context ctx = (Context) param.thisObject;
                     new Handler(Looper.getMainLooper()).postDelayed(() -> sendVersionBroadcast(ctx, isLegacy75), 3000);
                     sendVersionBroadcast(ctx, isLegacy75);
@@ -65,11 +64,11 @@ public class MainHook implements IXposedHookLoadPackage {
 
             // 3. 9.1 植入 Trojan
             if (!isLegacy75) {
-                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V211 (反向欺骗版) Binder。");
+                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V211 (语法修复版) Binder。");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
+                        protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) {
                             param.setResult(new TrojanBinder(lpparam.classLoader));
                         }
                     });
@@ -83,7 +82,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (lpparam.packageName.equals(PKG_SERVICE)) {
             XposedHelpers.findAndHookMethod(Application.class, "onCreate", new XC_MethodHook() {
                 @Override
-                protected void afterHookedMethod(MethodHookParam param) {
+                protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) {
                     sysContext = (Context) param.thisObject;
                     sysHandler = new Handler(Looper.getMainLooper());
                     registerVersionReceiver();
@@ -113,7 +112,7 @@ public class MainHook implements IXposedHookLoadPackage {
             // 强制告诉引擎：宽 1920
             XposedHelpers.findAndHookMethod(cls, "getMapSurfaceWidth", new XC_MethodReplacement() {
                 @Override
-                protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                protected Object replaceHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
                     // XposedBridge.log("NaviHook: [Map] 引擎查询宽度 -> 返回 1920");
                     return 1920;
                 }
@@ -122,7 +121,7 @@ public class MainHook implements IXposedHookLoadPackage {
             // 强制告诉引擎：高 720
             XposedHelpers.findAndHookMethod(cls, "getMapSurfaceHeight", new XC_MethodReplacement() {
                 @Override
-                protected Object replaceHookedMethod(MethodHookParam param) throws Throwable {
+                protected Object replaceHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
                     // XposedBridge.log("NaviHook: [Map] 引擎查询高度 -> 返回 720");
                     return 720;
                 }
@@ -176,7 +175,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 🦄 V211 TrojanBinder (触发重绘)
+    // 🦄 V211 TrojanBinder
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
@@ -200,7 +199,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
                 // 只有大包才是 Surface (Code 2 / 1)
                 if (dataSize > 200 && (code == 2 || code == 1 || code == 43)) {
-                    if (isSurfaceActive && code == 1) { // 已经激活，忽略 Update
+                    if (isSurfaceActive && code == 1) { 
                          if (reply != null) reply.writeNoException();
                          return true;
                     }
@@ -252,19 +251,27 @@ public class MainHook implements IXposedHookLoadPackage {
                 Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", classLoader);
                 
                 // 1. 调用 nativeSurfaceCreated
-                // 签名: (int displayId, int type, Surface s)
                 Method mCreate = XposedHelpers.findMethodExact(cls, "nativeSurfaceCreated", int.class, int.class, Surface.class);
                 mCreate.invoke(null, 1, 2, surface);
                 XposedBridge.log("NaviHook: [Map] ✅ Created 调用成功");
 
-                // 2. 🔥 踢一脚：触发重绘 (RedrawNeeded)
-                // 这可能会让引擎去查询我们 Hook 的 getMapSurfaceWidth/Height
-                try {
-                    Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class);
-                    mRedraw.invoke(null, 1, 2);
-                    XposedBridge.log("NaviHook: [Map] ✅ RedrawNeeded 调用成功");
-                } catch (Throwable t) {
-                    XposedBridge.log("NaviHook: [Map] ⚠️ Redraw 调用失败: " + t);
+                // 2. 🔥 触发重绘 (RedrawNeeded)
+                // 遍历方法找到 RedrawNeeded，防止参数签名不对导致崩溃
+                boolean redrawFound = false;
+                for (Method m : cls.getDeclaredMethods()) {
+                    if (m.getName().equals("nativeSurfaceRedrawNeeded")) {
+                        m.setAccessible(true);
+                        // 盲猜参数：如果是 (int, int)，就传 1, 2
+                        if (m.getParameterCount() == 2) {
+                            m.invoke(null, 1, 2);
+                            redrawFound = true;
+                            XposedBridge.log("NaviHook: [Map] ✅ RedrawNeeded 触发成功");
+                            break;
+                        }
+                    }
+                }
+                if (!redrawFound) {
+                    XposedBridge.log("NaviHook: [Map] ⚠️ 未找到匹配的 RedrawNeeded 方法");
                 }
 
             } catch (Throwable t) { 
@@ -278,28 +285,29 @@ public class MainHook implements IXposedHookLoadPackage {
         XC_MethodHook spoofHook = new XC_MethodHook() {
             @SuppressWarnings("unchecked")
             @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+            protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
                 Intent intent = (Intent) param.args[0];
                 if (intent != null && intent.getComponent() != null && TARGET_SERVICE.equals(intent.getComponent().getClassName())) {
-                    List<ResolveInfo> result = null;
-                    if (param.getResult() instanceof List) {
-                        result = (List<ResolveInfo>) param.getResult();
-                    } else {
-                        if (param.getResult() == null) result = new ArrayList<>();
-                        else return; 
-                    }
-                    if (result == null) result = new ArrayList<>();
-                    if (result.isEmpty()) {
-                        ResolveInfo info = new ResolveInfo();
-                        info.serviceInfo = new ServiceInfo();
+                    // ... 保持原有逻辑 ...
+                    // 简化版写法，避免篇幅过长
+                    Object resultObj = param.getResult();
+                    boolean isEmpty = false;
+                    if (resultObj == null) isEmpty = true;
+                    else if (resultObj instanceof java.util.List) isEmpty = ((java.util.List) resultObj).isEmpty();
+                    
+                    if (isEmpty) {
+                        android.content.pm.ResolveInfo info = new android.content.pm.ResolveInfo();
+                        info.serviceInfo = new android.content.pm.ServiceInfo();
                         info.serviceInfo.packageName = PKG_MAP;
                         info.serviceInfo.name = TARGET_SERVICE;
                         info.serviceInfo.exported = true;
-                        info.serviceInfo.applicationInfo = new ApplicationInfo();
+                        info.serviceInfo.applicationInfo = new android.content.pm.ApplicationInfo();
                         info.serviceInfo.applicationInfo.packageName = PKG_MAP;
-                        if (param.getResult() instanceof List) {
-                            result.add(info);
-                            param.setResult(result);
+                        
+                        if (resultObj instanceof java.util.List) {
+                            java.util.List list = new java.util.ArrayList();
+                            list.add(info);
+                            param.setResult(list);
                         } else {
                             param.setResult(info);
                         }
