@@ -13,7 +13,6 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Parcel;
 import android.view.Surface;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -49,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 1. 分辨率 Hook
+            // 1. 分辨率 Hook (保持成功逻辑)
             hookSurfaceDimensions(lpparam.classLoader);
 
             // 2. 版本检测广播
@@ -65,7 +64,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
             // 3. 9.1 植入 TrojanBinder
             if (!isLegacy75) {
-                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V218 Binder。");
+                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V219。");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
@@ -106,7 +105,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 📡 注入逻辑 (V218 核心：全字段扫描 + 暴力反射)
+    // 📡 注入逻辑 (V219 核心：定点爆破 f 字段)
     // =============================================================
     private void bindToMapService() {
         if (sysContext == null) return;
@@ -117,7 +116,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 sysContext.bindService(intent, new ServiceConnection() {
                     @Override
                     public void onServiceConnected(ComponentName name, IBinder service) {
-                        XposedBridge.log("NaviHook: [Sys] ✅ 物理连接建立，启动全域扫描注入...");
+                        XposedBridge.log("NaviHook: [Sys] ✅ 物理连接建立，执行定点注入...");
                         injectToDashboard(service);
                     }
                     @Override public void onServiceDisconnected(ComponentName name) {}
@@ -133,52 +132,30 @@ public class MainHook implements IXposedHookLoadPackage {
                 return;
             }
 
-            Class<?> mgrClass = dashboardMgr.getClass();
-            XposedBridge.log("NaviHook: [Sys] 扫描 " + mgrClass.getName() + " 的字段...");
-
-            boolean injected = false;
-
-            // 🔥 核心：遍历 dashboardMgr 的所有字段 (a, b, c, d, e, f, g, h...)
-            for (Field field : mgrClass.getDeclaredFields()) {
-                field.setAccessible(true); // 强制访问私有字段
-                Object fieldObj = null;
-                try {
-                    fieldObj = field.get(dashboardMgr);
-                } catch (Exception e) { continue; }
-
-                if (fieldObj == null) continue;
-
-                // 对每个字段对象，遍历它的所有方法 (getDeclaredMethods 获取所有权限的方法)
-                Class<?> fieldClass = fieldObj.getClass();
-                for (Method m : fieldClass.getDeclaredMethods()) {
-                    
-                    // 检查参数特征：(ComponentName, IBinder)
-                    Class<?>[] params = m.getParameterTypes();
-                    if (params.length == 2 && 
-                        params[0] == ComponentName.class && 
-                        params[1] == IBinder.class) {
-                        
-                        // 找到了！不管它叫 onServiceConnected 还是 a 还是 b
-                        try {
-                            m.setAccessible(true); // 强制访问私有/匿名方法
-                            m.invoke(fieldObj, new ComponentName(PKG_MAP, TARGET_SERVICE), binder);
-                            
-                            XposedBridge.log("NaviHook: [Sys] ✅✅✅ 注入成功！");
-                            XposedBridge.log("NaviHook: [Sys] 目标字段: " + field.getName() + " (" + fieldClass.getName() + ")");
-                            XposedBridge.log("NaviHook: [Sys] 目标方法: " + m.getName());
-                            
-                            injected = true;
-                            triggerWakeUp();
-                            return; // 成功后立即退出
-                        } catch (Exception e) {
-                            XposedBridge.log("NaviHook: [Sys] ⚠️ 找到匹配方法但调用失败: " + e);
-                        }
-                    }
-                }
+            // 1. 获取 f 字段 (根据你的情报，它就在这里)
+            Object internalConn = XposedHelpers.getObjectField(dashboardMgr, "f");
+            if (internalConn == null) {
+                XposedBridge.log("NaviHook: [Sys] ❌ 致命错误：dashboardMgr.f 为空！请检查字段名。");
+                return;
             }
 
-            if (!injected) {
-                XposedBridge.log("NaviHook: [Sys] ❌ 扫描结束，未找到任何接受 (ComponentName, IBinder) 的方法");
+            XposedBridge.log("NaviHook: [Sys] 锁定目标对象: " + internalConn.getClass().getName());
+
+            // 2. 暴力获取方法 (getDeclaredMethod + setAccessible)
+            // 这能绕过 "public only" 的限制，直接调用私有或匿名类的方法
+            try {
+                Method m = internalConn.getClass().getDeclaredMethod("onServiceConnected", ComponentName.class, IBinder.class);
+                m.setAccessible(true); // 🔥 关键：强制解锁权限
+                m.invoke(internalConn, new ComponentName(PKG_MAP, TARGET_SERVICE), binder);
+                
+                XposedBridge.log("NaviHook: [Sys] ✅✅✅ 注入成功 (定点爆破)！");
+                triggerWakeUp();
+            } catch (NoSuchMethodException e) {
+                XposedBridge.log("NaviHook: [Sys] ❌ 方法未找到: onServiceConnected。可能被混淆了？");
+                // 兜底：如果名字不对，打印所有方法名
+                for (Method m : internalConn.getClass().getDeclaredMethods()) {
+                     XposedBridge.log("   Found: " + m.getName());
+                }
             }
 
         } catch (Throwable t) {
@@ -201,7 +178,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 🦄 V218 TrojanBinder (保持 V214 的成功逻辑)
+    // 🦄 V219 TrojanBinder (保持成功逻辑)
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
@@ -236,6 +213,8 @@ public class MainHook implements IXposedHookLoadPackage {
                         final Surface s = surface;
                         uiHandler.post(() -> injectNativeEngine(s));
                         isSurfaceActive = true;
+                    } else {
+                        XposedBridge.log("NaviHook: [Binder] ❌ Surface 解析失败");
                     }
                     
                     if (reply != null) reply.writeNoException();
@@ -244,6 +223,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 
                 if (code == 2 && dataSize < 100) { 
                     isSurfaceActive = false;
+                    XposedBridge.log("NaviHook: [Binder] 收到 Reset");
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
@@ -281,7 +261,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 try {
                     Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class, Surface.class);
                     mRedraw.invoke(null, 1, 2, surface);
-                    XposedBridge.log("NaviHook: [Map] ✅ Redraw 调用成功");
+                    XposedBridge.log("NaviHook: [Map] ✅ Redraw (3参数) 调用成功");
                 } catch (Throwable t) { 
                     for (Method m : cls.getDeclaredMethods()) {
                         if (m.getName().equals("nativeSurfaceRedrawNeeded")) {
