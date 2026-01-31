@@ -36,12 +36,11 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String TARGET_SERVICE = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     private static final String ACTION_STOP_HEARTBEAT = "com.xsf.amaphelper.STOP_HEARTBEAT";
 
-    // 系统侧变量
     private static Context sysContext;
     private static Handler sysHandler;
     private static Object dashboardMgr;
     private static Timer statusHeartbeat;
-    private static int lastSentStatus = -1; // 状态缓存，防止日志刷屏
+    private static int lastSentStatus = -1;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -54,40 +53,27 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 1. 版本判定
+            // 版本判定：7.5 必须避让，9.1 必须注入
             boolean isLegacy75 = XposedHelpers.findClassIfExists("com.AutoHelper", lpparam.classLoader) != null;
             
             if (isLegacy75) {
-                // 【7.5 策略 - 优化版】
-                // 植入"观察者" Binder，不拦截逻辑，仅用于确认原生连接状态
-                XposedBridge.log("NaviHook: [Map] ⚠️ 识别为 7.5。启用观察模式，不替换 Binder。");
-                try {
-                    XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            // 不修改 result，让原生 Binder 返回
-                            XposedBridge.log("NaviHook: [Map-7.5] 原生 onBind 被调用 (Native Binder Active)");
-                        }
-                    });
-                } catch (Throwable t) {}
+                // 【7.5 策略】绝对不 Hook onBind，防止双重 Binder 冲突（闪烁根源）
+                XposedBridge.log("NaviHook: [Map] ⚠️ 识别为 7.5。保留原生 Binder，不进行植入。");
             } else {
-                // 【9.1 策略】
-                // 必须 Hook onBind 植入特洛伊木马
-                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1。启用注入模式。");
+                // 【9.1 策略】Hook onBind，植入特洛伊木马
+                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1。植入 V206 TrojanBinder。");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
-                            XposedBridge.log("NaviHook: [Map] 🚨 9.1 收到 Bind，释放 TrojanBinder...");
+                            XposedBridge.log("NaviHook: [Map] 🚨 9.1 Bind 拦截，返回 TrojanBinder");
                             param.setResult(new TrojanBinder(lpparam.classLoader));
                         }
                     });
-                } catch (Throwable t) {
-                    XposedBridge.log("NaviHook: [Map] Hook 失败: " + t);
-                }
+                } catch (Throwable t) {}
             }
             
-            // 防御性 Hook
+            // 防御性 Hook，防止 onCreate 报错
             try {
                 XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onCreate", new XC_MethodHook() {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {}
@@ -105,17 +91,16 @@ public class MainHook implements IXposedHookLoadPackage {
                     sysContext = (Context) param.thisObject;
                     sysHandler = new Handler(Looper.getMainLooper());
                     
-                    // 注册优雅停止广播
                     registerStopReceiver();
                     
+                    // 延迟执行，等待系统初始化完成
                     sysHandler.postDelayed(() -> initSystemEnvironment(lpparam.classLoader), 5000);
                 }
             });
 
-            // 🔥 PM 欺骗：7.5 巡航投屏的基础
+            // 🔥 [关键] PM 欺骗：让 7.5 在巡航时也能被发现
             hookPackageManager(lpparam.classLoader);
 
-            // 解锁 Vendor 校验
             try {
                 Class<?> cfg = XposedHelpers.findClassIfExists("ecarx.naviservice.map.co", lpparam.classLoader);
                 if (cfg != null) XposedHelpers.findAndHookMethod(cfg, "g", XC_MethodReplacement.returnConstant(true));
@@ -124,12 +109,12 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 🦄 特洛伊 Binder (9.1 专用 + 数据包校验)
+    // 🦄 特洛伊 Binder (仅 9.1 激活)
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
         private boolean isSurfaceActive = false;
-        private Handler uiHandler; 
+        private Handler uiHandler; // ✅ 修复 9.1 黑屏/握手失败的核心
 
         public TrojanBinder(ClassLoader cl) {
             this.classLoader = cl;
@@ -139,13 +124,10 @@ public class MainHook implements IXposedHookLoadPackage {
         @Override
         protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
             try {
-                // Code 4/43: Surface 传输
+                // Code 4 / 43: Surface 传输
                 if (code == 4 || code == 43) {
-                    // 🔥 优化：数据包大小校验，防止误判
-                    if (data.dataSize() < 50) {
-                        XposedBridge.log("NaviHook: [Binder] 忽略小包 (Size: " + data.dataSize() + ")");
-                        return true; 
-                    }
+                    // 数据包大小校验，过滤无效包
+                    if (data.dataSize() < 50) return true;
 
                     if (isSurfaceActive) {
                         if (reply != null) reply.writeNoException();
@@ -158,8 +140,12 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (data.readInt() != 0) {
                         Surface surface = Surface.CREATOR.createFromParcel(data);
                         if (surface != null && surface.isValid()) {
-                            XposedBridge.log("NaviHook: [Binder] 9.1 捕获有效 Surface，主线程注入...");
+                            XposedBridge.log("NaviHook: [Binder] 9.1 收到 Surface! 主线程注入...");
+                            
+                            // 🔥🔥🔥 核心修复：必须切回主线程调用 Native 引擎
+                            // 否则 9.1 会黑屏并断开连接 (Code 2)
                             uiHandler.post(() -> injectNativeEngine(surface));
+                            
                             isSurfaceActive = true;
                         }
                     }
@@ -167,14 +153,14 @@ public class MainHook implements IXposedHookLoadPackage {
                     return true;
                 }
                 
-                // Code 2: Reset
+                // Code 2: 断开/停止
                 if (code == 2) {
+                    XposedBridge.log("NaviHook: [Binder] 收到 Code 2 (系统请求断开)");
                     isSurfaceActive = false;
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
                 
-                // Code 20/1: Heartbeat
                 if (code == 20 || code == 1) {
                     if (reply != null) reply.writeNoException();
                     return true;
@@ -188,7 +174,11 @@ public class MainHook implements IXposedHookLoadPackage {
                 Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", classLoader);
                 Method m = XposedHelpers.findMethodExact(cls, "nativeSurfaceCreated", int.class, int.class, Surface.class);
                 m.invoke(null, 1, 2, surface);
-            } catch (Throwable t) { isSurfaceActive = false; }
+                XposedBridge.log("NaviHook: [Map] ✅ 引擎注入调用完成");
+            } catch (Throwable t) { 
+                XposedBridge.log("NaviHook: [Map] ❌ 引擎注入失败: " + t);
+                isSurfaceActive = false; 
+            }
         }
     }
 
@@ -206,20 +196,18 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (param.getResult() instanceof List) {
                         result = (List<ResolveInfo>) param.getResult();
                     } else {
-                        ResolveInfo single = (ResolveInfo) param.getResult();
-                        if (single == null) result = new ArrayList<>();
-                        else return; 
+                        if (param.getResult() == null) result = new ArrayList<>();
+                        else return; // 已经找到了，无需欺骗
                     }
                     
                     if (result == null) result = new ArrayList<>();
-
                     if (result.isEmpty()) {
-                        XposedBridge.log("NaviHook: [PM] 🎭 伪造服务可见性");
+                        // XposedBridge.log("NaviHook: [PM] 欺骗系统服务存在"); 
                         ResolveInfo info = new ResolveInfo();
                         info.serviceInfo = new ServiceInfo();
                         info.serviceInfo.packageName = PKG_MAP;
                         info.serviceInfo.name = TARGET_SERVICE;
-                        info.serviceInfo.exported = true; 
+                        info.serviceInfo.exported = true; // 关键：Exported
                         info.serviceInfo.applicationInfo = new ApplicationInfo();
                         info.serviceInfo.applicationInfo.packageName = PKG_MAP;
                         
@@ -241,27 +229,8 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 📡 系统侧智能初始化 & 优雅停止
+    // 📡 系统侧逻辑 (V206 修正版)
     // =============================================================
-    
-    // 注册广播接收器，用于优雅停止心跳
-    private void registerStopReceiver() {
-        try {
-            IntentFilter filter = new IntentFilter(ACTION_STOP_HEARTBEAT);
-            sysContext.registerReceiver(new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    if (ACTION_STOP_HEARTBEAT.equals(intent.getAction())) {
-                        stopStatusHeartbeat();
-                        XposedBridge.log("NaviHook: [Sys] 🛑 收到指令，心跳已停止。");
-                    }
-                }
-            }, filter);
-        } catch (Throwable t) {
-            XposedBridge.log("NaviHook: [Sys] 广播注册失败: " + t);
-        }
-    }
-
     private void initSystemEnvironment(ClassLoader cl) {
         try {
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
@@ -270,16 +239,24 @@ public class MainHook implements IXposedHookLoadPackage {
             Object conn = null;
             try { conn = XposedHelpers.getObjectField(dashboardMgr, "f"); } catch (Throwable t) {}
             
+            // 🔥 V206 核心修正：
+            // 不要检查类名！因为日志显示是混淆的 "ecarx.naviservice.a.i"。
+            // 只要 conn 不为空，就说明系统认为自己连上了（7.5 原生模式）。
+            
             if (conn != null) {
                 // 【7.5 模式】
-                XposedBridge.log("NaviHook: [Sys] ✅ 发现原生连接 (7.5)。仅启动心跳，不Bind。");
-                // 启动循环心跳，维持巡航状态
+                XposedBridge.log("NaviHook: [Sys] ✅ 发现现有连接 (判定为 7.5 原生)。");
+                XposedBridge.log("NaviHook: [Sys] ⛔ 禁止执行 Bind，根治闪烁！");
+                
+                // 启动循环心跳 (每3秒)，强行把状态置为 16
+                // 这样即使 7.5 在巡航，也会被心跳“骗”去投屏
                 startStatusHeartbeat(true); 
             } else {
                 // 【9.1 模式】
-                XposedBridge.log("NaviHook: [Sys] ❌ 未发现连接 (9.1)。执行 Bind + 激活。");
+                XposedBridge.log("NaviHook: [Sys] ❌ 连接为空 (判定为 9.1)。");
+                XposedBridge.log("NaviHook: [Sys] 🚀 执行 Bind + 激活。");
                 bindToMapService();
-                // 9.1 不需要循环心跳，发一次即可
+                // 9.1 只需要发一次激活
                 startStatusHeartbeat(false); 
             }
 
@@ -297,7 +274,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 sysContext.bindService(intent, new ServiceConnection() {
                     @Override
                     public void onServiceConnected(ComponentName name, IBinder service) {
-                        XposedBridge.log("NaviHook: [Sys] 9.1 物理连接成功");
+                        XposedBridge.log("NaviHook: [Sys] 9.1 Bind 成功");
                         injectToDashboard(service);
                     }
                     @Override public void onServiceDisconnected(ComponentName name) {}
@@ -316,9 +293,9 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    // 💓 智能心跳
+    // 状态心跳
     private void startStatusHeartbeat(boolean isLoop) {
-        stopStatusHeartbeat(); // 先清理旧的
+        stopStatusHeartbeat();
         
         statusHeartbeat = new Timer();
         statusHeartbeat.schedule(new TimerTask() {
@@ -329,25 +306,16 @@ public class MainHook implements IXposedHookLoadPackage {
                     return;
                 }
                 try {
-                    // 🔥 优化：只在状态变化时打印日志，但指令依然发送（为了覆盖系统回滚）
-                    boolean statusChanged = (lastSentStatus != 16);
-                    
+                    // 7.5 需要循环覆盖原生状态，9.1 只需要激活一次
                     ClassLoader cl = sysContext.getClassLoader();
                     
-                    // Switch State 3 (投屏)
                     Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", cl), 5, 0);
                     XposedHelpers.setIntField(sw, "mSwitchState", 3);
                     XposedHelpers.callMethod(dashboardMgr, "a", sw);
 
-                    // Status 16 (导航中)
                     Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", cl), 0);
-                    XposedHelpers.setIntField(st, "status", 16);
+                    XposedHelpers.setIntField(st, "status", 16); // 16 = 导航中
                     XposedHelpers.callMethod(dashboardMgr, "a", st);
-                    
-                    if (statusChanged) {
-                        XposedBridge.log("NaviHook: [Sys] ⚡ 状态已强制为 16 (投屏模式)");
-                        lastSentStatus = 16;
-                    }
                     
                 } catch (Throwable t) {}
             }
@@ -358,7 +326,21 @@ public class MainHook implements IXposedHookLoadPackage {
         if (statusHeartbeat != null) {
             statusHeartbeat.cancel();
             statusHeartbeat = null;
-            lastSentStatus = -1; // 重置状态
         }
+    }
+
+    private void registerStopReceiver() {
+        try {
+            IntentFilter filter = new IntentFilter(ACTION_STOP_HEARTBEAT);
+            sysContext.registerReceiver(new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (ACTION_STOP_HEARTBEAT.equals(intent.getAction())) {
+                        stopStatusHeartbeat();
+                        XposedBridge.log("NaviHook: [Sys] 心跳已停止");
+                    }
+                }
+            }, filter);
+        } catch (Throwable t) {}
     }
 }
