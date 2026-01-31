@@ -48,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
         // 🏰 战场 A：高德地图进程
         // =============================================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            // 1. Hook 分辨率查询方法 (核心修复)
+            // 1. Hook 分辨率 (V212 核心修复：动态扫描)
             hookSurfaceDimensions(lpparam.classLoader);
 
             // 2. 版本检测与广播
@@ -64,7 +64,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
             // 3. 9.1 植入 Trojan
             if (!isLegacy75) {
-                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V211 (语法修复版) Binder。");
+                XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，植入 V212 (万能适配版) Binder。");
                 try {
                     XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                         @Override
@@ -104,32 +104,45 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 🔥🔥🔥 V211 核心：分辨率欺骗
+    // 🔥🔥🔥 V212 核心：动态暴力 Hook 分辨率
+    // 即使方法有参数 (如 int displayId)，也能 Hook 成功
     private void hookSurfaceDimensions(ClassLoader cl) {
         try {
             Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", cl);
             
-            // 强制告诉引擎：宽 1920
-            XposedHelpers.findAndHookMethod(cls, "getMapSurfaceWidth", new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
-                    // XposedBridge.log("NaviHook: [Map] 引擎查询宽度 -> 返回 1920");
-                    return 1920;
+            for (Method m : cls.getDeclaredMethods()) {
+                // Hook 宽度
+                if (m.getName().equals("getMapSurfaceWidth")) {
+                    XposedBridge.hookMethod(m, new XC_MethodReplacement() {
+                        @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                            return 1920; // 强制返回 1920
+                        }
+                    });
+                    XposedBridge.log("NaviHook: [Map] ✅ 成功 Hook 宽度: " + m.toString());
                 }
-            });
+                
+                // Hook 高度
+                if (m.getName().equals("getMapSurfaceHeight")) {
+                    XposedBridge.hookMethod(m, new XC_MethodReplacement() {
+                        @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                            return 720; // 强制返回 720
+                        }
+                    });
+                    XposedBridge.log("NaviHook: [Map] ✅ 成功 Hook 高度: " + m.toString());
+                }
 
-            // 强制告诉引擎：高 720
-            XposedHelpers.findAndHookMethod(cls, "getMapSurfaceHeight", new XC_MethodReplacement() {
-                @Override
-                protected Object replaceHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
-                    // XposedBridge.log("NaviHook: [Map] 引擎查询高度 -> 返回 720");
-                    return 720;
+                // Hook DPI (新增，防止因为 DPI=0 导致不渲染)
+                if (m.getName().equals("getMapSurfaceDpi")) {
+                    XposedBridge.hookMethod(m, new XC_MethodReplacement() {
+                        @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                            return 320; // 车机常见 DPI
+                        }
+                    });
+                    XposedBridge.log("NaviHook: [Map] ✅ 成功 Hook DPI: " + m.toString());
                 }
-            });
-            
-            XposedBridge.log("NaviHook: [Map] ✅ 分辨率 Hook 成功 (1920x720)");
+            }
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: [Map] ❌ 分辨率 Hook 失败: " + t);
+            XposedBridge.log("NaviHook: [Map] ❌ 分辨率 Hook 异常: " + t);
         }
     }
 
@@ -175,7 +188,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 🦄 V211 TrojanBinder
+    // 🦄 V212 TrojanBinder (Offset 128 + Redraw)
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
@@ -192,12 +205,11 @@ public class MainHook implements IXposedHookLoadPackage {
             try {
                 int dataSize = data.dataSize();
                 
-                if (code == 4) { // 忽略握手包
+                if (code == 4) { 
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
 
-                // 只有大包才是 Surface (Code 2 / 1)
                 if (dataSize > 200 && (code == 2 || code == 1 || code == 43)) {
                     if (isSurfaceActive && code == 1) { 
                          if (reply != null) reply.writeNoException();
@@ -255,23 +267,17 @@ public class MainHook implements IXposedHookLoadPackage {
                 mCreate.invoke(null, 1, 2, surface);
                 XposedBridge.log("NaviHook: [Map] ✅ Created 调用成功");
 
-                // 2. 🔥 触发重绘 (RedrawNeeded)
-                // 遍历方法找到 RedrawNeeded，防止参数签名不对导致崩溃
-                boolean redrawFound = false;
+                // 2. 触发重绘 (遍历查找，防止签名错误)
                 for (Method m : cls.getDeclaredMethods()) {
                     if (m.getName().equals("nativeSurfaceRedrawNeeded")) {
                         m.setAccessible(true);
-                        // 盲猜参数：如果是 (int, int)，就传 1, 2
-                        if (m.getParameterCount() == 2) {
-                            m.invoke(null, 1, 2);
-                            redrawFound = true;
-                            XposedBridge.log("NaviHook: [Map] ✅ RedrawNeeded 触发成功");
-                            break;
-                        }
+                        // 盲猜调用参数
+                        if (m.getParameterCount() == 2) m.invoke(null, 1, 2);
+                        else if (m.getParameterCount() == 0) m.invoke(null);
+                        
+                        XposedBridge.log("NaviHook: [Map] ✅ RedrawNeeded 触发: " + m.toString());
+                        break;
                     }
-                }
-                if (!redrawFound) {
-                    XposedBridge.log("NaviHook: [Map] ⚠️ 未找到匹配的 RedrawNeeded 方法");
                 }
 
             } catch (Throwable t) { 
@@ -288,8 +294,6 @@ public class MainHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) throws Throwable {
                 Intent intent = (Intent) param.args[0];
                 if (intent != null && intent.getComponent() != null && TARGET_SERVICE.equals(intent.getComponent().getClassName())) {
-                    // ... 保持原有逻辑 ...
-                    // 简化版写法，避免篇幅过长
                     Object resultObj = param.getResult();
                     boolean isEmpty = false;
                     if (resultObj == null) isEmpty = true;
