@@ -32,6 +32,9 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PKG_SELF = "com.xsf.amaphelper";
     private static final String TARGET_SERVICE = "com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService";
     private static final String BINDER_DESCRIPTOR = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
+    
+    // 🔥 V233 补回缺失的变量定义
+    private static final String ACTION_VERSION_CHECK = "com.xsf.amaphelper.VERSION_CHECK";
 
     private static Context sysContext;
     private static Handler sysHandler;
@@ -80,7 +83,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
 
                     // --- 9.1 逻辑 ---
-                    XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，启动 V232。");
+                    XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，启动 V233。");
                     hookSurfaceDimensions(cl);
 
                     try {
@@ -186,39 +189,31 @@ public class MainHook implements IXposedHookLoadPackage {
                 intent.setComponent(new ComponentName(PKG_MAP, TARGET_SERVICE));
                 sysContext.bindService(intent, (ServiceConnection) connectionObj, Context.BIND_AUTO_CREATE);
                 
-                // 🔥 V232 核心：发送完整激活序列 (模仿 V182)
+                // 🔥 发送完整激活序列
                 triggerActivationSequence();
 
             } catch (Throwable t) {}
         }, 2000);
     }
 
-    // 🔥 完整的激活序列 (Status 1 -> 3 -> 16)
-    // 这是诱导系统发送 Code 1 的关键！
     private static void triggerActivationSequence() {
         if (dashboardMgr == null) return;
         sysHandler.post(() -> {
             try {
                 XposedBridge.log("NaviHook: [Sys] ⚡ 执行激活序列 (1 -> 3 -> 16)...");
-                // 1. 初始化
                 sendMapStatus(1);
                 Thread.sleep(50);
-                
-                // 2. 前台
                 sendMapStatus(3);
                 Thread.sleep(50);
-                
-                // 3. 切换布局 + 导航中
                 sendMapSwitch(3); // CRUISE_TO_GUIDE
                 sendMapStatus(16); // NAVI_STATUS
-                
                 XposedBridge.log("NaviHook: [Sys] ✅ 激活序列发送完毕");
             } catch (Throwable t) {}
         });
     }
 
     // =============================================================
-    // 🦄 TrojanBinder (V232)
+    // 🦄 TrojanBinder
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
@@ -305,16 +300,14 @@ public class MainHook implements IXposedHookLoadPackage {
                 mCreate.invoke(null, 1, 2, surface);
                 XposedBridge.log("NaviHook: [Map] ✅ Created");
 
-                // 2. Changed (Correct Method Name)
-                // 这里的关键：方法名是 nativesurfaceChanged (小写s)，且参数是 5 个
+                // 2. Changed (V231 Fix: nativesurfaceChanged)
                 try {
                     Method mChange = XposedHelpers.findMethodExact(cls, "nativesurfaceChanged", int.class, Surface.class, int.class, int.class, int.class);
                     // 参数: displayId=1, surface, format=0, w=1920, h=720
                     mChange.invoke(null, 1, surface, 0, 1920, 720);
                     XposedBridge.log("NaviHook: [Map] ✅ Changed (1920x720)");
                 } catch (NoSuchMethodException e) {
-                    XposedBridge.log("NaviHook: [Map] ⚠️ nativesurfaceChanged 未找到，尝试 Redraw...");
-                    // 兜底: nativeSurfaceRedrawNeeded (有些版本可能叫这个)
+                    // 兜底
                     try {
                         Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class, Surface.class);
                         mRedraw.invoke(null, 1, 2, surface);
@@ -332,9 +325,8 @@ public class MainHook implements IXposedHookLoadPackage {
     // 工具方法
     // =============================================================
     
-    // PM 欺骗：增加版本判断，如果是 7.5 绝对不骗
     private static void hookPackageManager(ClassLoader cl) {
-        // 如果系统检测到是 7.5，直接不进行 Hook
+        // 7.5 不骗，9.1 才骗
         if (isMap75_InSys) return;
 
         XC_MethodHook spoofHook = new XC_MethodHook() {
@@ -413,7 +405,7 @@ public class MainHook implements IXposedHookLoadPackage {
             public void onReceive(Context context, Intent intent) {
                 boolean is75 = intent.getBooleanExtra("is_75", false);
                 if (is75) {
-                    isMap75_InSys = true; // 标记为 7.5
+                    isMap75_InSys = true; 
                 } else {
                     isMap75_InSys = false;
                     initAs91();
