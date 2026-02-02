@@ -40,7 +40,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Timer statusHeartbeat;
     private static boolean isSystemReady = false;
     
-    // 🔥 默认关闭欺骗，防止 7.5 闪屏
+    // 7.5 防护开关 (默认关闭欺骗)
     private static boolean isSpoofingAllowed = false;
 
     @Override
@@ -60,30 +60,32 @@ public class MainHook implements IXposedHookLoadPackage {
                     Context ctx = (Context) param.thisObject;
                     ClassLoader cl = ctx.getClassLoader();
 
-                    // 1. 版本检测
-                    boolean isLegacy75 = false;
+                    // 1. 特征检测 (只有9.1才有这个Adapter包)
+                    boolean isMap9 = false;
                     try {
-                        cl.loadClass("com.AutoHelper");
-                        isLegacy75 = true;
+                        cl.loadClass("com.autonavi.amapauto.adapter.internal.widget.AutoSimilarWidgetService");
+                        isMap9 = true;
                     } catch (ClassNotFoundException e) {
-                        isLegacy75 = false;
+                        isMap9 = false;
                     }
 
                     // 广播通知系统
-                    final boolean finalIsLegacy = isLegacy75;
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> sendVersionBroadcast(ctx, finalIsLegacy), 3000);
-                    sendVersionBroadcast(ctx, finalIsLegacy);
+                    final boolean finalIsMap9 = isMap9;
+                    new Handler(Looper.getMainLooper()).postDelayed(() -> sendVersionBroadcast(ctx, finalIsMap9), 3000);
+                    sendVersionBroadcast(ctx, finalIsMap9);
 
-                    // 🛑 7.5 止步：彻底不执行任何 Hook
-                    if (isLegacy75) {
-                        XposedBridge.log("NaviHook: [Map] ⚠️ 识别为 7.5，模块休眠。");
+                    if (!isMap9) {
+                        XposedBridge.log("NaviHook: [Map] ⚠️ 非9.1版本，模块休眠 (防闪屏)。");
                         return;
                     }
 
                     // --- 9.1 逻辑 ---
-                    XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，启动 V234。");
+                    XposedBridge.log("NaviHook: [Map] ⚡ 识别为 9.1，启动 V235。");
+                    
+                    // 2. Hook 分辨率 (仅9.1生效)
                     hookSurfaceDimensions(cl);
 
+                    // 3. 植入特洛伊 Binder
                     try {
                         XposedHelpers.findAndHookMethod(TARGET_SERVICE, cl, "onBind", Intent.class, new XC_MethodHook() {
                             @Override
@@ -91,7 +93,9 @@ public class MainHook implements IXposedHookLoadPackage {
                                 param.setResult(new TrojanBinder(cl));
                             }
                         });
-                    } catch (Throwable t) {}
+                    } catch (Throwable t) {
+                        XposedBridge.log("NaviHook: [Map] 植入 Binder 失败: " + t);
+                    }
                 }
             });
         }
@@ -106,22 +110,18 @@ public class MainHook implements IXposedHookLoadPackage {
                     sysContext = (Context) param.thisObject;
                     sysHandler = new Handler(Looper.getMainLooper());
                     
-                    // 预先检查已安装的高德版本 (决定是否开启欺骗)
-                    checkMapVersionInSystem(sysContext);
-                    
                     registerVersionReceiver();
                     
-                    // 兜底
+                    // 兜底：12秒未收到广播，且未被禁用，则尝试
                     sysHandler.postDelayed(() -> {
                         if (!isSystemReady && isSpoofingAllowed) {
-                            XposedBridge.log("NaviHook: [Sys] ⚠️ 超时强制连接");
                             initAs91();
                         }
                     }, 12000);
                 }
             });
 
-            // 🔥 智能 PM 欺骗：根据 isSpoofingAllowed 决定是否拦截
+            // 智能 PM 欺骗：只有收到 9.1 广播才开启，解决 7.5 闪屏
             hookPackageManager(lpparam.classLoader);
             
             try {
@@ -132,26 +132,9 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // =============================================================
-    // 📡 系统侧核心逻辑
+    // 📡 系统侧核心
     // =============================================================
     
-    // 在系统侧预检查高德版本
-    private static void checkMapVersionInSystem(Context ctx) {
-        try {
-            PackageInfo pInfo = ctx.getPackageManager().getPackageInfo(PKG_MAP, 0);
-            if (pInfo.versionName != null && pInfo.versionName.startsWith("7")) {
-                isSpoofingAllowed = false; // 7.5 -> 关欺骗 -> 不闪屏
-                XposedBridge.log("NaviHook: [Sys] 预检发现高德 7.5，禁用 PM 欺骗。");
-            } else {
-                isSpoofingAllowed = true; // 9.1 -> 开欺骗 -> 允许连接
-                XposedBridge.log("NaviHook: [Sys] 预检发现高德 9.x+，启用 PM 欺骗。");
-            }
-        } catch (Throwable t) {
-            // 如果获取失败，默认 false 安全起见
-            isSpoofingAllowed = false;
-        }
-    }
-
     private static void initAs91() {
         if (sysContext == null || isSystemReady) return;
         isSystemReady = true;
@@ -169,6 +152,7 @@ public class MainHook implements IXposedHookLoadPackage {
         sysHandler.postDelayed(() -> {
             try {
                 ClassLoader cl = sysContext.getClassLoader();
+                // h.e 是单例
                 Class<?> hClass = XposedHelpers.findClass("ecarx.naviservice.map.amap.h", cl);
                 Object managerInstance = XposedHelpers.getStaticObjectField(hClass, "e");
                 
@@ -177,6 +161,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     return;
                 }
 
+                // f 字段是 ServiceConnection
                 Object connectionObj = null;
                 try {
                     connectionObj = XposedHelpers.getObjectField(managerInstance, "f");
@@ -184,11 +169,12 @@ public class MainHook implements IXposedHookLoadPackage {
 
                 if (connectionObj == null) return;
 
-                XposedBridge.log("NaviHook: [Sys] 🚀 发起 bindService...");
+                XposedBridge.log("NaviHook: [Sys] 🚀 手动发起 bindService...");
                 Intent intent = new Intent();
                 intent.setComponent(new ComponentName(PKG_MAP, TARGET_SERVICE));
                 sysContext.bindService(intent, (ServiceConnection) connectionObj, Context.BIND_AUTO_CREATE);
                 
+                // 发送激活序列
                 triggerActivationSequence();
 
             } catch (Throwable t) {}
@@ -199,25 +185,27 @@ public class MainHook implements IXposedHookLoadPackage {
         if (dashboardMgr == null) return;
         sysHandler.post(() -> {
             try {
-                XposedBridge.log("NaviHook: [Sys] ⚡ 执行激活序列 (1 -> 3 -> 16)...");
+                // 1 -> 3 -> 16 序列
                 sendMapStatus(1);
                 Thread.sleep(50);
                 sendMapStatus(3);
                 Thread.sleep(50);
                 sendMapSwitch(3); 
                 sendMapStatus(16); 
-                XposedBridge.log("NaviHook: [Sys] ✅ 激活序列发送完毕");
+                XposedBridge.log("NaviHook: [Sys] ✅ 激活序列已发送");
             } catch (Throwable t) {}
         });
     }
 
     // =============================================================
-    // 🦄 TrojanBinder
+    // 🦄 TrojanBinder (核心修复：双向握手)
     // =============================================================
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
         private boolean isSurfaceActive = false;
         private Handler uiHandler;
+        // 🔥 保存系统的回调接口
+        private IBinder systemProvider;
 
         public TrojanBinder(ClassLoader cl) {
             this.classLoader = cl;
@@ -232,41 +220,60 @@ public class MainHook implements IXposedHookLoadPackage {
                     return true;
                 }
 
-                // Code 1: addSurface
-                if (code == 1) {
-                    XposedBridge.log("NaviHook: [Binder] 🔥🔥🔥 收到 Code 1 (addSurface)！");
-                    if (isSurfaceActive) {
-                        if (reply != null) reply.writeNoException();
-                        return true;
-                    }
-                    Surface surface = tryExtendedBruteForce(data);
-                    if (surface != null && surface.isValid()) {
-                        XposedBridge.log("NaviHook: [Binder] ✅ Surface 有效，注入！");
-                        final Surface s = surface;
-                        uiHandler.post(() -> injectNativeEngine(s));
-                        isSurfaceActive = true;
-                    }
+                // Code 4: 握手 (获取 systemProvider)
+                if (code == 4) {
+                    try {
+                        // 🔥 保存回调 Binder
+                        systemProvider = data.readStrongBinder();
+                        XposedBridge.log("NaviHook: [Binder] 🤝 收到 Code 4，已捕获 SystemProvider");
+                    } catch (Throwable t) {}
+                    
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
 
-                if (code == 4) { // Handshake
-                    try { data.readStrongBinder(); } catch (Throwable t) {}
+                // Code 1: addSurface
+                if (code == 1) {
+                    XposedBridge.log("NaviHook: [Binder] 🔥 收到 Code 1 (Surface)");
+                    
+                    if (isSurfaceActive) {
+                        if (reply != null) reply.writeNoException();
+                        return true;
+                    }
+
+                    // 解析 Surface
+                    Surface surface = tryExtendedBruteForce(data);
+                    if (surface != null && surface.isValid()) {
+                        XposedBridge.log("NaviHook: [Binder] ✅ Surface 有效，注入引擎...");
+                        final Surface s = surface;
+                        uiHandler.post(() -> {
+                            // 1. 注入
+                            injectNativeEngine(s);
+                            // 2. 🔥 关键：通知系统 "画好了"
+                            notifySystemFrameDrawn();
+                        });
+                        isSurfaceActive = true;
+                    }
+                    
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
-                
-                if (code == 3) {
+
+                // 其他 Code
+                if (code == 5) { // Touch
+                    if (reply != null) reply.writeNoException();
+                    return true;
+                }
+                if (code == 2) { // Reset
+                    isSurfaceActive = false;
+                    if (reply != null) reply.writeNoException();
+                    return true;
+                }
+                if (code == 3) { // isRunning
                     if (reply != null) {
                         reply.writeNoException();
                         reply.writeInt(1); 
                     }
-                    return true;
-                }
-                
-                if (code == 2) {
-                    isSurfaceActive = false;
-                    if (reply != null) reply.writeNoException();
                     return true;
                 }
 
@@ -274,6 +281,28 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedBridge.log("NaviHook: [Binder] Error: " + t);
             }
             return true;
+        }
+
+        // 🔥 通知系统开屏 (onWidgetFirstFrameDrawn)
+        private void notifySystemFrameDrawn() {
+            if (systemProvider == null) {
+                XposedBridge.log("NaviHook: [Binder] ⚠️ 无法通知系统，Provider 为空！");
+                return;
+            }
+            try {
+                Parcel data = Parcel.obtain();
+                Parcel reply = Parcel.obtain();
+                try {
+                    // Code 1 = onWidgetFirstFrameDrawn (in IAutoWidgetStateProvider)
+                    systemProvider.transact(1, data, reply, 0); // 0 = 同步调用
+                    XposedBridge.log("NaviHook: [Binder] ✅✅✅ 已通知系统 FrameDrawn！屏幕应点亮。");
+                } finally {
+                    data.recycle();
+                    reply.recycle();
+                }
+            } catch (Throwable t) {
+                XposedBridge.log("NaviHook: [Binder] 通知 FrameDrawn 失败: " + t);
+            }
         }
 
         private Surface tryExtendedBruteForce(Parcel data) {
@@ -294,26 +323,22 @@ public class MainHook implements IXposedHookLoadPackage {
             try {
                 Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", classLoader);
                 
+                // 1. Created (displayId=1 仪表)
                 Method mCreate = XposedHelpers.findMethodExact(cls, "nativeSurfaceCreated", int.class, int.class, Surface.class);
                 mCreate.invoke(null, 1, 2, surface);
-                XposedBridge.log("NaviHook: [Map] ✅ Created");
-
-                // 🔥 编译错误修复点：使用 catch (Throwable t)
+                
+                // 2. Changed (1920x720)
                 try {
-                    // nativesurfaceChanged (小写s)
+                    // nativesurfaceChanged(int displayId, Surface surface, int format, int width, int height)
                     Method mChange = XposedHelpers.findMethodExact(cls, "nativesurfaceChanged", int.class, Surface.class, int.class, int.class, int.class);
                     mChange.invoke(null, 1, surface, 0, 1920, 720);
-                    XposedBridge.log("NaviHook: [Map] ✅ Changed (1920x720)");
-                } catch (Throwable t) { // 捕获所有异常 (NoSuchMethodError, Exception等)
-                    XposedBridge.log("NaviHook: [Map] ⚠️ nativesurfaceChanged 失败，尝试 Redraw: " + t);
-                    try {
-                        Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class, Surface.class);
-                        mRedraw.invoke(null, 1, 2, surface);
-                    } catch (Throwable t2) {}
+                    XposedBridge.log("NaviHook: [Map] ✅ Engine Configured (1920x720)");
+                } catch (Throwable t) {
+                    XposedBridge.log("NaviHook: [Map] nativesurfaceChanged 失败: " + t);
                 }
 
             } catch (Throwable t) { 
-                XposedBridge.log("NaviHook: [Map] 注入异常: " + t);
+                XposedBridge.log("NaviHook: [Map] Engine注入失败: " + t);
                 isSurfaceActive = false; 
             }
         }
@@ -324,8 +349,7 @@ public class MainHook implements IXposedHookLoadPackage {
     // =============================================================
     
     private static void hookPackageManager(ClassLoader cl) {
-        // 🔥 核心防线：只有允许欺骗时 (9.1) 才执行 Hook
-        // 7.5 时 isSpoofingAllowed 为 false，直接跳过，所以系统找不到服务，也就不会闪屏
+        // 只有 9.1 允许欺骗
         if (!isSpoofingAllowed) return;
 
         XC_MethodHook spoofHook = new XC_MethodHook() {
@@ -388,11 +412,13 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    private static void sendVersionBroadcast(Context ctx, boolean is75) {
+    private static void sendVersionBroadcast(Context ctx, boolean isMap9) {
         try {
             Intent intent = new Intent(ACTION_VERSION_CHECK);
             intent.setPackage(PKG_SERVICE);
-            intent.putExtra("is_75", is75);
+            // 广播: true 代表是9.1 (方便逻辑反转，或者保持 is75=false)
+            // 这里为了代码清晰：putExtra("is_75", !isMap9)
+            intent.putExtra("is_75", !isMap9);
             ctx.sendBroadcast(intent);
         } catch (Throwable t) {}
     }
@@ -404,11 +430,14 @@ public class MainHook implements IXposedHookLoadPackage {
             public void onReceive(Context context, Intent intent) {
                 boolean is75 = intent.getBooleanExtra("is_75", false);
                 if (is75) {
-                    isSpoofingAllowed = false; // 双重保险
+                    isSpoofingAllowed = false; // 7.5 不欺骗 -> 不闪屏
+                    XposedBridge.log("NaviHook: [Sys] 收到 7.5 广播，关闭 PM 欺骗");
                 } else {
-                    isSpoofingAllowed = true;
+                    isSpoofingAllowed = true;  // 9.1 开启欺骗 -> 允许连接
+                    XposedBridge.log("NaviHook: [Sys] 收到 9.1 广播，开启 PM 欺骗");
                     initAs91();
                 }
+                isSystemReady = true;
             }
         }, filter);
     }
