@@ -165,6 +165,16 @@ public class MainHook implements IXposedHookLoadPackage {
             this.uiHandler = new Handler(Looper.getMainLooper());
         }
 
+        private void enforceInterfaceSafely(Parcel data, String descriptor) {
+            try {
+                data.enforceInterface(descriptor);
+            } catch (Throwable first) {
+                data.setDataPosition(0);
+                try { data.readInt(); } catch (Throwable ignored) {}
+                data.enforceInterface(descriptor);
+            }
+        }
+
         @Override
         protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
             try {
@@ -175,42 +185,74 @@ public class MainHook implements IXposedHookLoadPackage {
 
                 if (code == 4) {
                     data.setDataPosition(0);
-                    String token = null;
-                    int pos0 = data.dataPosition();
+                    try {
+                        enforceInterfaceSafely(data, BINDER_DESCRIPTOR);
+                        systemProvider = data.readStrongBinder();
 
-                    try { token = data.readString(); } catch (Throwable ignored) {}
-
-                    if (!PROVIDER_DESCRIPTOR.equals(token)) {
-                        data.setDataPosition(pos0);
-                        try { data.readInt(); } catch (Throwable ignored) {}
-                        try { token = data.readString(); } catch (Throwable ignored) {}
-                    }
-
-                    IBinder b = null;
-                    try { b = data.readStrongBinder(); } catch (Throwable ignored) {}
-
-                    if (b == null) {
-                        int pos = data.dataPosition();
-                        try { data.readInt(); } catch (Throwable ignored2) { data.setDataPosition(pos); }
-                        try { b = data.readStrongBinder(); } catch (Throwable ignored3) {}
-                    }
-
-                    if (PROVIDER_DESCRIPTOR.equals(token) && b != null) {
-                        systemProvider = b;
-                        Parcel d = Parcel.obtain();
-                        Parcel r = Parcel.obtain();
-                        try {
-                            systemProvider.transact(1598968902, d, r, 0);
-                            XposedBridge.log("NaviHook: [Binder] 🤝 Code4 OK provider desc=" + r.readString());
-                        } catch (Throwable ignored) {
-                        } finally {
-                            d.recycle();
-                            r.recycle();
+                        if (systemProvider != null) {
+                            boolean isAlive = systemProvider.isBinderAlive();
+                            Parcel d = Parcel.obtain();
+                            Parcel r = Parcel.obtain();
+                            try {
+                                systemProvider.transact(1598968902, d, r, 0);
+                                XposedBridge.log("NaviHook: [Binder] 🤝 Code4 OK provider desc=" + r.readString() + " alive=" + isAlive);
+                            } finally {
+                                d.recycle();
+                                r.recycle();
+                            }
+                        } else {
+                            XposedBridge.log("NaviHook: [Binder] ⚠️ Code4 provider is null");
                         }
-                    } else {
-                        XposedBridge.log("NaviHook: [Binder] ⚠️ Code4 ignored token=" + token + " b=" + b);
+                    } catch (Throwable t) {
+                        XposedBridge.log("NaviHook: [Binder] ❌ Code4 parse fail: " + t);
+                    }
+                    if (reply != null) reply.writeNoException();
+                    return true;
+                }
+
+                if (code == 1) {
+                    if (isSurfaceActive) {
+                        if (reply != null) reply.writeNoException();
+                        return true;
+                    }
+                    
+                    data.setDataPosition(0); 
+                    Surface surface = null;
+                    try {
+                        enforceInterfaceSafely(data, BINDER_DESCRIPTOR);
+                        int hasSurface = data.readInt();
+                        if (hasSurface != 0) {
+                            surface = Surface.CREATOR.createFromParcel(data);
+                        }
+                        try { data.readInt(); } catch (Throwable ignored) {}
+                    } catch (Throwable t) {
+                        XposedBridge.log("NaviHook: [Binder] ⚠️ Code1 严格解析失败，准备盲扫: " + t);
                     }
 
+                    // 🔥 fallback 盲扫兜底
+                    if (surface == null || !surface.isValid()) {
+                        XposedBridge.log("NaviHook: [Binder] ⚠️ 开始盲扫 Surface...");
+                        data.setDataPosition(0);
+                        surface = tryExtendedBruteForce(data);
+                    }
+                    
+                    if (surface != null && surface.isValid()) {
+                        XposedBridge.log("NaviHook: [Binder] ✅ Surface valid, start inject");
+                        final Surface s = surface;
+                        uiHandler.post(() -> {
+                            if (injectNativeEngine(s)) {
+                                isSurfaceActive = true;
+                                XposedBridge.log("NaviHook: [Map] ✅ inject ok");
+                                notifySystemFrameDrawn();
+                                uiHandler.postDelayed(this::notifySystemFrameDrawn, 50);
+                            } else {
+                                XposedBridge.log("NaviHook: [Map] ❌ inject fail");
+                            }
+                        });
+                    } else {
+                        XposedBridge.log("NaviHook: [Binder] ❌ Code1 未找到有效 Surface");
+                    }
+                    
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
@@ -235,38 +277,12 @@ public class MainHook implements IXposedHookLoadPackage {
                     return true;
                 }
 
-                if (code == 1) {
-                    data.setDataPosition(0); 
-                    if (isSurfaceActive) {
-                        if (reply != null) reply.writeNoException();
-                        return true;
-                    }
-                    
-                    Surface surface = tryExtendedBruteForce(data);
-                    if (surface != null && surface.isValid()) {
-                        XposedBridge.log("NaviHook: [Binder] ✅ Surface valid, start inject");
-                        final Surface s = surface;
-                        uiHandler.post(() -> {
-                            if (injectNativeEngine(s)) {
-                                isSurfaceActive = true;
-                                notifySystemFrameDrawn();
-                                uiHandler.postDelayed(this::notifySystemFrameDrawn, 50);
-                            }
-                        });
-                    }
-                    if (reply != null) reply.writeNoException();
-                    return true;
-                }
-
             } catch (Throwable t) {}
-            return true;
+            return super.onTransact(code, data, reply, flags);
         }
 
         private void notifySystemFrameDrawn() {
-            if (systemProvider == null || !systemProvider.isBinderAlive()) {
-                systemProvider = null;
-                return;
-            }
+            if (systemProvider == null || !systemProvider.isBinderAlive()) return;
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
@@ -275,6 +291,8 @@ public class MainHook implements IXposedHookLoadPackage {
                 try { reply.readException(); } catch (Throwable ignored) {}
                 XposedBridge.log("NaviHook: [Binder] ✅ FrameDrawn transact ok=" + ok);
             } catch (Throwable t) {
+                // 🔥 非常关键的探针日志
+                XposedBridge.log("NaviHook: [Binder] ❌ FrameDrawn fail: " + t);
             } finally {
                 data.recycle();
                 reply.recycle();
@@ -307,11 +325,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class, Surface.class);
                     mRedraw.invoke(null, 1, 2, surface);
                 }
-                XposedBridge.log("NaviHook: [Map] ✅ inject ok");
                 return true; 
             } catch (Throwable t) { 
-                isSurfaceActive = false;
-                XposedBridge.log("NaviHook: [Map] ❌ inject fail: " + t);
+                isSurfaceActive = false; 
                 return false; 
             }
         }
@@ -323,7 +339,6 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                 if (!isSpoofingAllowed) return;
-
                 Intent intent = (Intent) param.args[0];
                 if (intent != null && intent.getComponent() != null && TARGET_SERVICE.equals(intent.getComponent().getClassName())) {
                     Object result = param.getResult();
