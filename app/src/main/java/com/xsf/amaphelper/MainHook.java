@@ -13,6 +13,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Parcel;
+import android.os.RemoteException;
 import android.view.Surface;
 import java.lang.reflect.Method;
 import java.util.Timer;
@@ -176,7 +177,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         @Override
-        protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
+        protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
             try {
                 if (code == 1598968902) {
                     if (reply != null) reply.writeString(BINDER_DESCRIPTOR);
@@ -229,7 +230,6 @@ public class MainHook implements IXposedHookLoadPackage {
                         XposedBridge.log("NaviHook: [Binder] ⚠️ Code1 严格解析失败，准备盲扫: " + t);
                     }
 
-                    // 🔥 fallback 盲扫兜底
                     if (surface == null || !surface.isValid()) {
                         XposedBridge.log("NaviHook: [Binder] ⚠️ 开始盲扫 Surface...");
                         data.setDataPosition(0);
@@ -291,7 +291,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 try { reply.readException(); } catch (Throwable ignored) {}
                 XposedBridge.log("NaviHook: [Binder] ✅ FrameDrawn transact ok=" + ok);
             } catch (Throwable t) {
-                // 🔥 非常关键的探针日志
                 XposedBridge.log("NaviHook: [Binder] ❌ FrameDrawn fail: " + t);
             } finally {
                 data.recycle();
