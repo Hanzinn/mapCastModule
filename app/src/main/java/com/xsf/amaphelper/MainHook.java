@@ -72,7 +72,6 @@ public class MainHook implements IXposedHookLoadPackage {
                         XposedHelpers.findAndHookMethod(TARGET_SERVICE, cl, "onBind", Intent.class, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) {
-                                // 🔥 V252: 恢复返回新实例，符合系统生命周期，防止状态残留
                                 param.setResult(new TrojanBinder(cl));
                             }
                         });
@@ -104,13 +103,16 @@ public class MainHook implements IXposedHookLoadPackage {
     private static void initAs91() {
         if (sysContext == null || isSystemReady) return;
         isSystemReady = true;
+        XposedBridge.log("NaviHook: [Sys] 🚗 initAs91 开始...");
         try {
             ClassLoader cl = sysContext.getClassLoader();
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
             dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
             performManualBind();
             startStatusHeartbeat();
-        } catch (Throwable t) {}
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: [Sys] ❌ initAs91 异常: " + t);
+        }
     }
 
     private static void performManualBind() {
@@ -128,6 +130,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 try { connectionObj = XposedHelpers.getObjectField(managerInstance, "f"); } catch (Throwable t) {}
                 if (connectionObj == null) return;
 
+                XposedBridge.log("NaviHook: [Sys] 发起 BindService...");
                 Intent intent = new Intent();
                 intent.setComponent(new ComponentName(PKG_MAP, TARGET_SERVICE));
                 sysContext.bindService(intent, (ServiceConnection) connectionObj, Context.BIND_AUTO_CREATE);
@@ -137,25 +140,25 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static void triggerActivationSequence() {
-        if (dashboardMgr == null) return;
-        sysHandler.post(() -> {
-            try {
-                sendMapStatus(1);
-                Thread.sleep(50);
-                sendMapStatus(3);
-                Thread.sleep(50);
-                sendMapSwitch(3); 
-                sendMapStatus(16); 
-            } catch (Throwable t) {}
-        });
+        if (dashboardMgr == null) {
+            XposedBridge.log("NaviHook: [Sys] ⚠️ dashboardMgr 为空，跳过激活序列！");
+            return;
+        }
+        XposedBridge.log("NaviHook: [Sys] ⚡ 执行非阻塞激活序列 (1->3->16)...");
+        // 🔥 V253: 坚决不能在主线程使用 Thread.sleep，全面改用 postDelayed
+        sysHandler.postDelayed(() -> sendMapStatus(1), 0);
+        sysHandler.postDelayed(() -> sendMapStatus(3), 50);
+        sysHandler.postDelayed(() -> {
+            sendMapSwitch(3); 
+            sendMapStatus(16); 
+            XposedBridge.log("NaviHook: [Sys] ✅ 激活序列发送完毕");
+        }, 100);
     }
 
     public static class TrojanBinder extends Binder {
         private ClassLoader classLoader;
-        private boolean isSurfaceActive = false; // 实例私有，连接重置时归零
+        private boolean isSurfaceActive = false;
         private Handler uiHandler;
-        
-        // 🔥 V252 核心机制：全局共享 Provider，免疫多次 Bind 割裂
         private static IBinder sSystemProvider = null;
 
         public TrojanBinder(ClassLoader cl) {
@@ -187,7 +190,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         enforceInterfaceSafely(data, BINDER_DESCRIPTOR);
                         IBinder newProvider = data.readStrongBinder();
                         if (newProvider != null) {
-                            sSystemProvider = newProvider; // 更新全局 Provider
+                            sSystemProvider = newProvider;
                             boolean isAlive = sSystemProvider.isBinderAlive();
                             Parcel d = Parcel.obtain();
                             Parcel r = Parcel.obtain();
@@ -206,18 +209,19 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (code == 1) {
                     data.setDataPosition(0); 
                     if (isSurfaceActive) {
-                        XposedBridge.log("NaviHook: [Binder] ⚠️ Code1 跳过: 当前连接已激活 Surface");
                         if (reply != null) reply.writeNoException();
                         return true;
                     }
                     
                     Surface surface = null;
+                    int displayId = 1; // 默认给 1
                     try {
                         enforceInterfaceSafely(data, BINDER_DESCRIPTOR);
                         if (data.readInt() != 0) {
                             surface = Surface.CREATOR.createFromParcel(data);
                         }
-                        try { data.readInt(); } catch (Throwable ignored) {}
+                        // 🔥 V253: 尝试读取系统指定的 displayId
+                        try { displayId = data.readInt(); } catch (Throwable ignored) {}
                     } catch (Throwable t) {}
 
                     if (surface == null || !surface.isValid()) {
@@ -226,20 +230,21 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                     
                     if (surface != null && surface.isValid()) {
-                        XposedBridge.log("NaviHook: [Binder] ✅ Surface valid, inject");
+                        XposedBridge.log("NaviHook: [Binder] ✅ Surface valid, ID=" + displayId + ", inject");
                         final Surface s = surface;
+                        final int finalDisplayId = (displayId <= 0) ? 1 : displayId; // 防呆
+                        
                         uiHandler.post(() -> {
-                            if (injectNativeEngine(s)) {
+                            if (injectNativeEngine(s, finalDisplayId)) {
                                 isSurfaceActive = true;
                                 XposedBridge.log("NaviHook: [Map] ✅ inject ok");
-                                notifySystemFrameDrawn();
-                                uiHandler.postDelayed(this::notifySystemFrameDrawn, 50);
+                                // 🔥 V253: 放长线钓大鱼，给足 200ms 和 600ms 让高德画出第一帧
+                                uiHandler.postDelayed(this::notifySystemFrameDrawn, 200);
+                                uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
                             } else {
                                 XposedBridge.log("NaviHook: [Map] ❌ inject fail");
                             }
                         });
-                    } else {
-                        XposedBridge.log("NaviHook: [Binder] ❌ Code1 无法获取有效 Surface");
                     }
                     
                     if (reply != null) reply.writeNoException();
@@ -248,12 +253,13 @@ public class MainHook implements IXposedHookLoadPackage {
 
                 if (code == 2) {
                     isSurfaceActive = false;
-                    XposedBridge.log("NaviHook: [Binder] ♻️ Code2: removedSurface (Provider safe)");
+                    XposedBridge.log("NaviHook: [Binder] ♻️ Code2: removedSurface");
                     if (reply != null) reply.writeNoException();
                     return true;
                 }
 
                 if (code == 3) {
+                    XposedBridge.log("NaviHook: [Binder] ℹ️ Code3: isMapRunning queried");
                     if (reply != null) {
                         reply.writeNoException();
                         reply.writeInt(1);
@@ -271,14 +277,9 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         private void notifySystemFrameDrawn() {
-            if (sSystemProvider == null) {
-                XposedBridge.log("NaviHook: [Binder] ❌ FrameDrawn skip: provider=null");
-                return;
-            }
-            if (!sSystemProvider.isBinderAlive()) {
-                XposedBridge.log("NaviHook: [Binder] ❌ FrameDrawn skip: provider=dead");
-                return;
-            }
+            if (sSystemProvider == null) return;
+            if (!sSystemProvider.isBinderAlive()) return;
+            
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
@@ -307,17 +308,18 @@ public class MainHook implements IXposedHookLoadPackage {
             return null;
         }
 
-        private boolean injectNativeEngine(Surface surface) {
+        // 🔥 V253: 接收动态 displayId
+        private boolean injectNativeEngine(Surface surface, int displayId) {
             try {
                 Class<?> cls = XposedHelpers.findClass("com.autonavi.amapauto.MapSurfaceView", classLoader);
                 Method mCreate = XposedHelpers.findMethodExact(cls, "nativeSurfaceCreated", int.class, int.class, Surface.class);
-                mCreate.invoke(null, 1, 2, surface);
+                mCreate.invoke(null, displayId, 2, surface);
                 try {
                     Method mChange = XposedHelpers.findMethodExact(cls, "nativesurfaceChanged", int.class, Surface.class, int.class, int.class, int.class);
-                    mChange.invoke(null, 1, surface, 0, 1920, 720);
+                    mChange.invoke(null, displayId, surface, 0, 1920, 720);
                 } catch (Throwable t) {
                     Method mRedraw = XposedHelpers.findMethodExact(cls, "nativeSurfaceRedrawNeeded", int.class, int.class, Surface.class);
-                    mRedraw.invoke(null, 1, 2, surface);
+                    mRedraw.invoke(null, displayId, 2, surface);
                 }
                 return true; 
             } catch (Throwable t) { 
