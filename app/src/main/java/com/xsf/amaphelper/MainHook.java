@@ -41,6 +41,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Timer statusHeartbeat;
     private static boolean isSystemReady = false;
     private static boolean isSpoofingAllowed = false;
+    
+    private static TrojanBinder sTrojanBinder;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -72,7 +74,10 @@ public class MainHook implements IXposedHookLoadPackage {
                         XposedHelpers.findAndHookMethod(TARGET_SERVICE, cl, "onBind", Intent.class, new XC_MethodHook() {
                             @Override
                             protected void afterHookedMethod(XC_MethodHook.MethodHookParam param) {
-                                param.setResult(new TrojanBinder(cl));
+                                if (sTrojanBinder == null) {
+                                    sTrojanBinder = new TrojanBinder(cl);
+                                }
+                                param.setResult(sTrojanBinder);
                             }
                         });
                     } catch (Throwable t) {}
@@ -188,6 +193,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             Parcel d = Parcel.obtain();
                             Parcel r = Parcel.obtain();
                             try {
+                                d.writeInterfaceToken(PROVIDER_DESCRIPTOR);
                                 systemProvider.transact(1598968902, d, r, 0);
                                 XposedBridge.log("NaviHook: [Binder] Code4 OK desc=" + r.readString() + " alive=" + isAlive);
                             } finally {
@@ -264,7 +270,14 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         private void notifySystemFrameDrawn() {
-            if (systemProvider == null || !systemProvider.isBinderAlive()) return;
+            if (systemProvider == null) {
+                XposedBridge.log("NaviHook: [Binder] FrameDrawn skip: provider=null");
+                return;
+            }
+            if (!systemProvider.isBinderAlive()) {
+                XposedBridge.log("NaviHook: [Binder] FrameDrawn skip: provider=dead");
+                return;
+            }
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
