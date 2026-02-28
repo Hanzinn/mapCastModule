@@ -41,7 +41,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Timer statusHeartbeat;
     private static boolean isSystemReady = false;
     private static boolean isSpoofingAllowed = false;
-    
     private static TrojanBinder sTrojanBinder;
 
     @Override
@@ -158,7 +157,9 @@ public class MainHook implements IXposedHookLoadPackage {
         private ClassLoader classLoader;
         private boolean isSurfaceActive = false;
         private Handler uiHandler;
-        private IBinder systemProvider;
+        
+        // 🔥 V251 核心防断层：升级为全局静态，坚决不被 null 掉
+        private static IBinder sSystemProvider = null;
 
         public TrojanBinder(ClassLoader cl) {
             this.classLoader = cl;
@@ -187,14 +188,13 @@ public class MainHook implements IXposedHookLoadPackage {
                     data.setDataPosition(0);
                     try {
                         enforceInterfaceSafely(data, BINDER_DESCRIPTOR);
-                        systemProvider = data.readStrongBinder();
-                        if (systemProvider != null) {
-                            boolean isAlive = systemProvider.isBinderAlive();
+                        sSystemProvider = data.readStrongBinder();
+                        if (sSystemProvider != null) {
+                            boolean isAlive = sSystemProvider.isBinderAlive();
                             Parcel d = Parcel.obtain();
                             Parcel r = Parcel.obtain();
                             try {
-                                d.writeInterfaceToken(PROVIDER_DESCRIPTOR);
-                                systemProvider.transact(1598968902, d, r, 0);
+                                sSystemProvider.transact(1598968902, d, r, 0);
                                 XposedBridge.log("NaviHook: [Binder] Code4 OK desc=" + r.readString() + " alive=" + isAlive);
                             } finally {
                                 d.recycle(); r.recycle();
@@ -245,10 +245,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     return true;
                 }
 
+                // 🔥 V251: 移除了清空 Provider 的致命逻辑！
                 if (code == 2) {
                     isSurfaceActive = false;
-                    systemProvider = null; 
                     if (reply != null) reply.writeNoException();
+                    XposedBridge.log("NaviHook: [Binder] Code2: removedSurface (Provider safe)");
                     return true;
                 }
 
@@ -270,11 +271,11 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         private void notifySystemFrameDrawn() {
-            if (systemProvider == null) {
+            if (sSystemProvider == null) {
                 XposedBridge.log("NaviHook: [Binder] FrameDrawn skip: provider=null");
                 return;
             }
-            if (!systemProvider.isBinderAlive()) {
+            if (!sSystemProvider.isBinderAlive()) {
                 XposedBridge.log("NaviHook: [Binder] FrameDrawn skip: provider=dead");
                 return;
             }
@@ -282,7 +283,7 @@ public class MainHook implements IXposedHookLoadPackage {
             Parcel reply = Parcel.obtain();
             try {
                 data.writeInterfaceToken(PROVIDER_DESCRIPTOR);
-                boolean ok = systemProvider.transact(1, data, reply, 0);
+                boolean ok = sSystemProvider.transact(1, data, reply, 0);
                 try { reply.readException(); } catch (Throwable ignored) {}
                 XposedBridge.log("NaviHook: [Binder] FrameDrawn ok=" + ok);
             } catch (Throwable t) {
