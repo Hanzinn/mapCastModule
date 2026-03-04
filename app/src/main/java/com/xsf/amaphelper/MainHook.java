@@ -32,7 +32,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String BINDER_DESCRIPTOR = "com.autosimilarwidget.view.IAutoSimilarWidgetViewService";
     private static final String PROVIDER_DESCRIPTOR = "com.autosimilarwidget.view.IAutoWidgetStateProvider";
     private static final String ACTION_VERSION_CHECK = "com.xsf.amaphelper.VERSION_CHECK";
-    private static final String ACTION_AMAP_BROADCAST = "AUTONAVI_STANDARD_BROADCAST_SEND";
     private static Context sysContext;
     private static Handler sysHandler;
     private static Object dashboardMgr;
@@ -82,6 +81,10 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             });
             hookPackageManager(lpparam.classLoader);
+            try {
+                Class<?> cfg = XposedHelpers.findClassIfExists("ecarx.naviservice.map.co", lpparam.classLoader);
+                if (cfg != null) XposedHelpers.findAndHookMethod(cfg, "g", XC_MethodReplacement.returnConstant(true));
+            } catch (Throwable t) {}
         }
     }
 
@@ -92,6 +95,24 @@ public class MainHook implements IXposedHookLoadPackage {
             ClassLoader cl = sysContext.getClassLoader();
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
             dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
+            
+            XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    if (param.args == null || param.args.length == 0) return;
+                    Object obj = param.args[0];
+                    if (obj == null) return;
+                    String cls = obj.getClass().getSimpleName();
+                    if ("MapStatusInfo".equals(cls)) {
+                        int status = XposedHelpers.getIntField(obj, "status");
+                        XposedBridge.log("NaviSpy: [Sys] MapStatusInfo -> " + status);
+                    } else if ("MapSwitchingInfo".equals(cls)) {
+                        int state = XposedHelpers.getIntField(obj, "mSwitchState");
+                        XposedBridge.log("NaviSpy: [Sys] MapSwitchingInfo -> " + state);
+                    }
+                }
+            });
+
             performManualBind();
             startStatusHeartbeat();
         } catch (Throwable t) {}
@@ -109,38 +130,41 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (conn == null) return;
                 Intent intent = new Intent().setComponent(new ComponentName(PKG_MAP, TARGET_SERVICE));
                 sysContext.bindService(intent, (ServiceConnection) conn, Context.BIND_AUTO_CREATE);
-                triggerActivationSequence();
             } catch (Throwable t) {}
         }, 2000);
     }
 
-    private static void triggerActivationSequence() {
-        if (dashboardMgr == null) return;
-        sysHandler.postDelayed(() -> sendMapStatus(12), 0);
-        sysHandler.postDelayed(() -> sendMapStatus(16), 500);
-        // 🔥 V265 核心：补全 DeepSeek 发现的缺失广播
-        sysHandler.postDelayed(() -> sendSyncBroadcasts(sysContext), 800);
-    }
-
+    // 🔥 V268: 补全 13034 广播，与 10122 形成双重火力覆盖
     private static void sendSyncBroadcasts(Context ctx) {
         try {
-            Intent intent = new Intent(ACTION_AMAP_BROADCAST);
-            intent.putExtra("KEY_TYPE", 10122);
-            intent.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
-            intent.putExtra("EXTRA_EXTERNAL_MAP_MODE", 3);
-            intent.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001);
-            ctx.sendBroadcast(intent);
-            XposedBridge.log("NaviHook: [Broadcast] 补全 10122 地图同步协议");
+            // 1. 发送 10122 引擎配置广播 (解锁 MultipleScreen.json)
+            Intent intent1 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
+            intent1.putExtra("KEY_TYPE", 10122);
+            intent1.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
+            intent1.putExtra("EXTRA_EXTERNAL_MAP_MODE", 3);
+            intent1.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); 
+            ctx.sendBroadcast(intent1);
+            
+            // 2. 发送 13034 实时地图层级同步广播 (满足车机的数据饥渴，防黑屏死机)
+            Intent intent2 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
+            intent2.putExtra("KEY_TYPE", 13034);
+            intent2.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
+            ctx.sendBroadcast(intent2);
+            
+            XposedBridge.log("NaviHook: [Sys] 同步广播 (10122 引擎ID + 13034 缩放层级) 已发送");
         } catch (Throwable t) {}
     }
 
     public static class TrojanProxyBinder extends Binder {
         private IBinder realBinder;
         private ClassLoader classLoader;
+        private Handler uiHandler;
         private static IBinder sSystemProvider = null;
 
         public TrojanProxyBinder(IBinder real, ClassLoader cl) {
-            this.realBinder = real; this.classLoader = cl; 
+            this.realBinder = real; 
+            this.classLoader = cl; 
+            this.uiHandler = new Handler(Looper.getMainLooper());
         }
 
         private void enforceInterfaceSafely(Parcel data, String desc, int pos) {
@@ -153,24 +177,57 @@ public class MainHook implements IXposedHookLoadPackage {
         protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
             if (code == 1598968902) { if (reply != null) reply.writeString(BINDER_DESCRIPTOR); return true; }
             int start = data.dataPosition();
+            
             if (code == 4) {
                 try { enforceInterfaceSafely(data, BINDER_DESCRIPTOR, start); sSystemProvider = data.readStrongBinder(); } catch (Throwable t) {}
                 data.setDataPosition(start);
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
+
+            // 收到 Code 1 时，全火力开屏
             if (code == 1) {
+                XposedBridge.log("NaviHook: [Proxy] 收到 Code 1 (AddSurface)");
+                data.setDataPosition(start);
+                boolean realRes = false;
+                Throwable realErr = null;
+                
+                try {
+                    if (realBinder != null) realRes = realBinder.transact(code, data, reply, flags);
+                    else realErr = new RuntimeException("null binder");
+                } catch (Throwable t) { realErr = t; }
+
+                sysHandler.post(() -> {
+                    sendMapStatus(16); // 16: 导航开始
+                    sendSyncBroadcasts(sysContext); // 10122 + 13034
+                });
+
+                if (realRes && realErr == null) {
+                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
+                    return true; 
+                }
+
                 data.setDataPosition(start); Surface s = null; int dId = -99;
                 try { enforceInterfaceSafely(data, BINDER_DESCRIPTOR, start); if (data.readInt() != 0) s = Surface.CREATOR.createFromParcel(data); dId = data.readInt(); } catch (Throwable t) {}
                 if (s == null || !s.isValid()) { data.setDataPosition(start); s = tryExtendedBruteForce(data); }
                 if (s != null && s.isValid()) {
                     final int fdId = (dId <= 0) ? 1 : dId;
                     injectNativeEngine(s, fdId);
-                    notifySystemFrameDrawn();
+                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
                 }
                 if (reply != null && !reply.hasFileDescriptors()) reply.writeNoException();
                 return true; 
             }
-            if (code == 2) { if (reply != null) reply.writeNoException(); return true; }
+            
+            // 收到 Code 2 时，优雅退屏
+            if (code == 2) {
+                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface)");
+                sysHandler.post(() -> sendMapStatus(17)); // 17: 导航停止
+                
+                try { if (realBinder != null) { data.setDataPosition(start); realBinder.transact(code, data, reply, flags); } } catch (Throwable t) {}
+                if (reply != null) reply.writeNoException();
+                return true; 
+            }
+            
             boolean realRes = false;
             try { if (realBinder != null) { data.setDataPosition(start); realRes = realBinder.transact(code, data, reply, flags); } } catch (Throwable t) { if (reply != null) reply.writeNoException(); return true; }
             return realRes;
@@ -261,6 +318,7 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
             XposedHelpers.setIntField(st, "status", s); XposedHelpers.callMethod(dashboardMgr, "a", st);
+            XposedBridge.log("NaviHook: [Sys] 下发 MapStatusInfo: " + s);
         } catch (Throwable t) {}
     }
 
@@ -270,7 +328,7 @@ public class MainHook implements IXposedHookLoadPackage {
             statusHeartbeat = new Timer();
             statusHeartbeat.schedule(new TimerTask() { @Override public void run() { 
                 sendMapStatus(16); 
-                sendSyncBroadcasts(sysContext); // 心跳同步广播
+                sendSyncBroadcasts(sysContext); 
             } }, 0, 2000);
         }, 5000);
     }
