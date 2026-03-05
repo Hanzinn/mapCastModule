@@ -34,6 +34,7 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String ACTION_VERSION_CHECK = "com.xsf.amaphelper.VERSION_CHECK";
     private static Context sysContext;
     private static Handler sysHandler;
+    private static Object dashboardMgr;
     private static Timer statusHeartbeat;
     private static boolean isSystemReady = false;
     private static boolean isSpoofingAllowed = false;
@@ -93,8 +94,8 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             ClassLoader cl = sysContext.getClassLoader();
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
-            
-            // 保留间谍日志，用来验证 LBSNavi 是否因为被骗而主动发了 16！
+            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b"); // 拿回 dashboardMgr 控制权
+
             XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -131,7 +132,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 2000);
     }
 
-    // 🔥 V271 核心：不再强暴仪表盘，而是欺骗 LBSNavi 大脑
+    // 维持欺骗广播，确保 Code 1 不断供
     private static void startSpoofingHeartbeat() {
         sysHandler.postDelayed(() -> {
             if (statusHeartbeat != null) statusHeartbeat.cancel();
@@ -140,14 +141,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override 
                 public void run() { 
                     try {
-                        // 1. 发送 10019 (STATE=40): 欺骗 LBSNavi 高德已经开始导航！
                         Intent intentNavi = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
                         intentNavi.putExtra("KEY_TYPE", 10019);
                         intentNavi.putExtra("EXTRA_STATE", 40); 
                         intentNavi.putExtra("EXTRA_STATUS_DETAILS", -1);
                         sysContext.sendBroadcast(intentNavi);
 
-                        // 2. 发送 10122: 欺骗底层引擎调用大屏配置
                         Intent intentEngine = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
                         intentEngine.putExtra("KEY_TYPE", 10122);
                         intentEngine.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
@@ -155,17 +154,36 @@ public class MainHook implements IXposedHookLoadPackage {
                         intentEngine.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); 
                         sysContext.sendBroadcast(intentEngine);
                         
-                        // 3. 发送 13034: 欺骗看门狗实时缩放
                         Intent intentSync = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
                         intentSync.putExtra("KEY_TYPE", 13034);
                         intentSync.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
                         sysContext.sendBroadcast(intentSync);
-
-                        XposedBridge.log("NaviHook: [Sys] 正在发送 10019+10122 欺骗广播，诱导系统下发 Code 1...");
                     } catch (Throwable t) {}
                 } 
             }, 0, 2500);
         }, 5000);
+    }
+
+    // 手动发状态方法恢复
+    private static void sendMapStatus(int s) {
+        if (dashboardMgr == null) return;
+        try {
+            Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
+            XposedHelpers.setIntField(st, "status", s);
+            XposedHelpers.callMethod(dashboardMgr, "a", st);
+            XposedBridge.log("NaviHook: [Sys] 强行拉幕布 - MapStatusInfo: " + s);
+        } catch (Throwable t) {}
+    }
+
+    // 手动发切屏方法恢复
+    private static void sendMapSwitch(int s) {
+        if (dashboardMgr == null) return;
+        try {
+            Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysContext.getClassLoader()), 5, 0);
+            XposedHelpers.setIntField(sw, "mSwitchState", s);
+            XposedHelpers.callMethod(dashboardMgr, "a", sw);
+            XposedBridge.log("NaviHook: [Sys] 强行拉幕布 - MapSwitchingInfo: " + s);
+        } catch (Throwable t) {}
     }
 
     public static class TrojanProxyBinder extends Binder {
@@ -197,9 +215,9 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
 
-            // 🔥 只要 LBSNavi 被骗成功，Code 1 必然会来到这里！
+            // 🔥 Code 1: 拿到画板，直接拉开幕布！
             if (code == 1) {
-                XposedBridge.log("NaviHook: [Proxy] 🎉 苍天有眼！终于收到 Code 1 (AddSurface)！");
+                XposedBridge.log("NaviHook: [Proxy] 🎉 苍天有眼！收到 Code 1，准备强制切屏！");
                 data.setDataPosition(start); 
                 Surface s = null; 
                 int dId = -99;
@@ -212,16 +230,23 @@ public class MainHook implements IXposedHookLoadPackage {
                     boolean inj = injectNativeEngine(s, fdId);
                     XposedBridge.log("NaviHook: [Proxy] C++ 引擎强制注入 (ID=" + fdId + ") = " + inj);
                     
+                    // 🚀 核心动作：向仪表盘强制发送切屏指令，露出 Surface！
+                    sysHandler.postDelayed(() -> {
+                        sendMapSwitch(3); // 3 = 切入导航模式
+                        sendMapStatus(16); // 16 = 导航开始
+                    }, 200);
+
                     uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
                 }
 
-                // 吃掉 Code 1，绝不传给原生
                 if (reply != null && !reply.hasFileDescriptors()) reply.writeNoException();
                 return true; 
             }
             
+            // 🔥 Code 2: 画板被收走，关上幕布！
             if (code == 2) {
                 XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface)");
+                sysHandler.post(() -> sendMapStatus(17)); // 17 = 导航停止
                 if (reply != null) reply.writeNoException();
                 return true; 
             }
