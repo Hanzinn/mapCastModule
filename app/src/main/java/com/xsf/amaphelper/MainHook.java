@@ -130,28 +130,34 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (conn == null) return;
                 Intent intent = new Intent().setComponent(new ComponentName(PKG_MAP, TARGET_SERVICE));
                 sysContext.bindService(intent, (ServiceConnection) conn, Context.BIND_AUTO_CREATE);
+                triggerActivationSequence();
             } catch (Throwable t) {}
         }, 2000);
     }
 
-    // 🔥 V268: 补全 13034 广播，与 10122 形成双重火力覆盖
+    // 🔥 V269: 终极组合拳（状态锁 + 切屏锁）
+    private static void triggerActivationSequence() {
+        if (dashboardMgr == null) return;
+        XposedBridge.log("NaviHook: [Sys] 发送强切屏唤醒序列...");
+        sysHandler.postDelayed(() -> sendMapStatus(17), 0);   // 17: GUIDE_STOP (初始化待命，符合用户日志)
+        sysHandler.postDelayed(() -> sendMapSwitch(3), 100);  // 3: CRUISE_SWITCH_TO_GUIDE (强制要求仪表盘展开地图界面)
+        sysHandler.postDelayed(() -> sendMapStatus(16), 200); // 16: GUIDE_START (确认导航开启)
+    }
+
+    // 🔥 广播锁：解锁 9.1 的 MultipleScreen.json 配置，防黑屏
     private static void sendSyncBroadcasts(Context ctx) {
         try {
-            // 1. 发送 10122 引擎配置广播 (解锁 MultipleScreen.json)
             Intent intent1 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
             intent1.putExtra("KEY_TYPE", 10122);
             intent1.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
             intent1.putExtra("EXTRA_EXTERNAL_MAP_MODE", 3);
-            intent1.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); 
+            intent1.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); // 对应 JSON 的 331 引擎
             ctx.sendBroadcast(intent1);
             
-            // 2. 发送 13034 实时地图层级同步广播 (满足车机的数据饥渴，防黑屏死机)
             Intent intent2 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
             intent2.putExtra("KEY_TYPE", 13034);
             intent2.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
             ctx.sendBroadcast(intent2);
-            
-            XposedBridge.log("NaviHook: [Sys] 同步广播 (10122 引擎ID + 13034 缩放层级) 已发送");
         } catch (Throwable t) {}
     }
 
@@ -184,7 +190,6 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
 
-            // 收到 Code 1 时，全火力开屏
             if (code == 1) {
                 XposedBridge.log("NaviHook: [Proxy] 收到 Code 1 (AddSurface)");
                 data.setDataPosition(start);
@@ -197,8 +202,8 @@ public class MainHook implements IXposedHookLoadPackage {
                 } catch (Throwable t) { realErr = t; }
 
                 sysHandler.post(() -> {
-                    sendMapStatus(16); // 16: 导航开始
-                    sendSyncBroadcasts(sysContext); // 10122 + 13034
+                    sendMapStatus(16); 
+                    sendSyncBroadcasts(sysContext); 
                 });
 
                 if (realRes && realErr == null) {
@@ -218,11 +223,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 return true; 
             }
             
-            // 收到 Code 2 时，优雅退屏
             if (code == 2) {
                 XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface)");
-                sysHandler.post(() -> sendMapStatus(17)); // 17: 导航停止
-                
+                sysHandler.post(() -> sendMapStatus(17)); // Code 2 时发送 17 恢复待命状态
                 try { if (realBinder != null) { data.setDataPosition(start); realBinder.transact(code, data, reply, flags); } } catch (Throwable t) {}
                 if (reply != null) reply.writeNoException();
                 return true; 
@@ -319,6 +322,14 @@ public class MainHook implements IXposedHookLoadPackage {
             Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
             XposedHelpers.setIntField(st, "status", s); XposedHelpers.callMethod(dashboardMgr, "a", st);
             XposedBridge.log("NaviHook: [Sys] 下发 MapStatusInfo: " + s);
+        } catch (Throwable t) {}
+    }
+
+    private static void sendMapSwitch(int s) {
+        try {
+            Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysContext.getClassLoader()), 5, 0);
+            XposedHelpers.setIntField(sw, "mSwitchState", s); XposedHelpers.callMethod(dashboardMgr, "a", sw);
+            XposedBridge.log("NaviHook: [Sys] 下发 MapSwitchingInfo: " + s);
         } catch (Throwable t) {}
     }
 
