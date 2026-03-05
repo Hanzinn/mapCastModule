@@ -96,6 +96,7 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
             dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
             
+            // 间谍日志
             XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -104,11 +105,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (obj == null) return;
                     String cls = obj.getClass().getSimpleName();
                     if ("MapStatusInfo".equals(cls)) {
-                        int status = XposedHelpers.getIntField(obj, "status");
-                        XposedBridge.log("NaviSpy: [Sys] MapStatusInfo -> " + status);
+                        XposedBridge.log("NaviSpy: [Sys] MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
                     } else if ("MapSwitchingInfo".equals(cls)) {
-                        int state = XposedHelpers.getIntField(obj, "mSwitchState");
-                        XposedBridge.log("NaviSpy: [Sys] MapSwitchingInfo -> " + state);
+                        XposedBridge.log("NaviSpy: [Sys] MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
                     }
                 }
             });
@@ -135,23 +134,24 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 2000);
     }
 
-    // 🔥 V269: 终极组合拳（状态锁 + 切屏锁）
+    // 🔥 V270: 恢复成功骗取 Code 1 的最强魔法序列
     private static void triggerActivationSequence() {
         if (dashboardMgr == null) return;
-        XposedBridge.log("NaviHook: [Sys] 发送强切屏唤醒序列...");
-        sysHandler.postDelayed(() -> sendMapStatus(17), 0);   // 17: GUIDE_STOP (初始化待命，符合用户日志)
-        sysHandler.postDelayed(() -> sendMapSwitch(3), 100);  // 3: CRUISE_SWITCH_TO_GUIDE (强制要求仪表盘展开地图界面)
-        sysHandler.postDelayed(() -> sendMapStatus(16), 200); // 16: GUIDE_START (确认导航开启)
+        XposedBridge.log("NaviHook: [Sys] 启动魔法清理与开屏序列...");
+        sysHandler.postDelayed(() -> sendMapStatus(1), 0);    // 清除旧路网视图
+        sysHandler.postDelayed(() -> sendMapStatus(3), 100);  // 清除旧交通视图
+        sysHandler.postDelayed(() -> sendMapSwitch(3), 200);  // 强制仪表盘切屏
+        sysHandler.postDelayed(() -> sendMapStatus(16), 300); // 宣布导航开始
     }
 
-    // 🔥 广播锁：解锁 9.1 的 MultipleScreen.json 配置，防黑屏
+    // 🔥 发送广播，骗过高德 9.1 的 C++ 引擎 JSON 校验
     private static void sendSyncBroadcasts(Context ctx) {
         try {
             Intent intent1 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
             intent1.putExtra("KEY_TYPE", 10122);
             intent1.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
             intent1.putExtra("EXTRA_EXTERNAL_MAP_MODE", 3);
-            intent1.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); // 对应 JSON 的 331 引擎
+            intent1.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); 
             ctx.sendBroadcast(intent1);
             
             Intent intent2 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
@@ -190,43 +190,34 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
 
+            // 🔥 V270 核心防御：拿到 Code 1 必须自己吃掉，绝不发给原生！
             if (code == 1) {
-                XposedBridge.log("NaviHook: [Proxy] 收到 Code 1 (AddSurface)");
-                data.setDataPosition(start);
-                boolean realRes = false;
-                Throwable realErr = null;
+                XposedBridge.log("NaviHook: [Proxy] 🎯 收到 Code 1 (AddSurface) - 独裁接管");
+                data.setDataPosition(start); 
+                Surface s = null; 
+                int dId = -99;
                 
-                try {
-                    if (realBinder != null) realRes = realBinder.transact(code, data, reply, flags);
-                    else realErr = new RuntimeException("null binder");
-                } catch (Throwable t) { realErr = t; }
-
-                sysHandler.post(() -> {
-                    sendMapStatus(16); 
-                    sendSyncBroadcasts(sysContext); 
-                });
-
-                if (realRes && realErr == null) {
-                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
-                    return true; 
-                }
-
-                data.setDataPosition(start); Surface s = null; int dId = -99;
                 try { enforceInterfaceSafely(data, BINDER_DESCRIPTOR, start); if (data.readInt() != 0) s = Surface.CREATOR.createFromParcel(data); dId = data.readInt(); } catch (Throwable t) {}
                 if (s == null || !s.isValid()) { data.setDataPosition(start); s = tryExtendedBruteForce(data); }
+                
                 if (s != null && s.isValid()) {
                     final int fdId = (dId <= 0) ? 1 : dId;
-                    injectNativeEngine(s, fdId);
+                    boolean inj = injectNativeEngine(s, fdId);
+                    XposedBridge.log("NaviHook: [Proxy] C++ 引擎注入 (ID=" + fdId + ") = " + inj);
+                    
+                    sysHandler.post(() -> sendSyncBroadcasts(sysContext));
                     uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
                 }
+
+                // 强制截断，绝不 return realBinder.transact()
                 if (reply != null && !reply.hasFileDescriptors()) reply.writeNoException();
                 return true; 
             }
             
+            // 🔥 V270 核心防御：截断 Code 2，只向仪表发送 17
             if (code == 2) {
-                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface)");
-                sysHandler.post(() -> sendMapStatus(17)); // Code 2 时发送 17 恢复待命状态
-                try { if (realBinder != null) { data.setDataPosition(start); realBinder.transact(code, data, reply, flags); } } catch (Throwable t) {}
+                XposedBridge.log("NaviHook: [Proxy] 🛑 收到 Code 2 (RemovedSurface) - 独裁接管");
+                sysHandler.post(() -> sendMapStatus(17)); // 发送 17 允许仪表盘正常退出投屏
                 if (reply != null) reply.writeNoException();
                 return true; 
             }
@@ -321,7 +312,6 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
             XposedHelpers.setIntField(st, "status", s); XposedHelpers.callMethod(dashboardMgr, "a", st);
-            XposedBridge.log("NaviHook: [Sys] 下发 MapStatusInfo: " + s);
         } catch (Throwable t) {}
     }
 
@@ -329,7 +319,6 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysContext.getClassLoader()), 5, 0);
             XposedHelpers.setIntField(sw, "mSwitchState", s); XposedHelpers.callMethod(dashboardMgr, "a", sw);
-            XposedBridge.log("NaviHook: [Sys] 下发 MapSwitchingInfo: " + s);
         } catch (Throwable t) {}
     }
 
