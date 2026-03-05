@@ -94,7 +94,7 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             ClassLoader cl = sysContext.getClassLoader();
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
-            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b"); // 拿回 dashboardMgr 控制权
+            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
 
             XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
                 @Override
@@ -104,9 +104,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (obj == null) return;
                     String cls = obj.getClass().getSimpleName();
                     if ("MapStatusInfo".equals(cls)) {
-                        XposedBridge.log("NaviSpy: [Sys] 系统主动发出 MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
+                        XposedBridge.log("NaviSpy: [Sys] MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
                     } else if ("MapSwitchingInfo".equals(cls)) {
-                        XposedBridge.log("NaviSpy: [Sys] 系统主动发出 MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
+                        XposedBridge.log("NaviSpy: [Sys] MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
                     }
                 }
             });
@@ -132,7 +132,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 2000);
     }
 
-    // 维持欺骗广播，确保 Code 1 不断供
+    // 欺骗 LBSNavi，引诱它下发 Code 1 屏幕
     private static void startSpoofingHeartbeat() {
         sysHandler.postDelayed(() -> {
             if (statusHeartbeat != null) statusHeartbeat.cancel();
@@ -164,25 +164,21 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 5000);
     }
 
-    // 手动发状态方法恢复
     private static void sendMapStatus(int s) {
         if (dashboardMgr == null) return;
         try {
             Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
             XposedHelpers.setIntField(st, "status", s);
             XposedHelpers.callMethod(dashboardMgr, "a", st);
-            XposedBridge.log("NaviHook: [Sys] 强行拉幕布 - MapStatusInfo: " + s);
         } catch (Throwable t) {}
     }
 
-    // 手动发切屏方法恢复
     private static void sendMapSwitch(int s) {
         if (dashboardMgr == null) return;
         try {
             Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysContext.getClassLoader()), 5, 0);
             XposedHelpers.setIntField(sw, "mSwitchState", s);
             XposedHelpers.callMethod(dashboardMgr, "a", sw);
-            XposedBridge.log("NaviHook: [Sys] 强行拉幕布 - MapSwitchingInfo: " + s);
         } catch (Throwable t) {}
     }
 
@@ -215,9 +211,16 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
 
-            // 🔥 Code 1: 拿到画板，直接拉开幕布！
+            // 🔥 核心修正：绝对不发 17 干扰！安安静静把 Code 2 吃掉
+            if (code == 2) {
+                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface) -> 拦截吃掉，不干扰仪表盘");
+                if (reply != null) reply.writeNoException();
+                return true; 
+            }
+
+            // 🔥 Code 1: 拿到画板，直接画图并拉开幕布！
             if (code == 1) {
-                XposedBridge.log("NaviHook: [Proxy] 🎉 苍天有眼！收到 Code 1，准备强制切屏！");
+                XposedBridge.log("NaviHook: [Proxy] 🎉 苍天有眼！收到 Code 1 (AddSurface)！");
                 data.setDataPosition(start); 
                 Surface s = null; 
                 int dId = -99;
@@ -230,24 +233,16 @@ public class MainHook implements IXposedHookLoadPackage {
                     boolean inj = injectNativeEngine(s, fdId);
                     XposedBridge.log("NaviHook: [Proxy] C++ 引擎强制注入 (ID=" + fdId + ") = " + inj);
                     
-                    // 🚀 核心动作：向仪表盘强制发送切屏指令，露出 Surface！
-                    sysHandler.postDelayed(() -> {
-                        sendMapSwitch(3); // 3 = 切入导航模式
-                        sendMapStatus(16); // 16 = 导航开始
-                    }, 200);
+                    // 🚀 核心动作：强制仪表盘拉开转速表，露出地图！
+                    sysHandler.post(() -> {
+                        sendMapSwitch(3);  // 强切导航 UI
+                        sendMapStatus(16); // 确认状态
+                    });
 
-                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
+                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 500);
                 }
 
                 if (reply != null && !reply.hasFileDescriptors()) reply.writeNoException();
-                return true; 
-            }
-            
-            // 🔥 Code 2: 画板被收走，关上幕布！
-            if (code == 2) {
-                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface)");
-                sysHandler.post(() -> sendMapStatus(17)); // 17 = 导航停止
-                if (reply != null) reply.writeNoException();
                 return true; 
             }
             
