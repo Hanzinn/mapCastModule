@@ -34,7 +34,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String ACTION_VERSION_CHECK = "com.xsf.amaphelper.VERSION_CHECK";
     private static Context sysContext;
     private static Handler sysHandler;
-    private static Object dashboardMgr;
     private static Timer statusHeartbeat;
     private static boolean isSystemReady = false;
     private static boolean isSpoofingAllowed = false;
@@ -94,9 +93,8 @@ public class MainHook implements IXposedHookLoadPackage {
         try {
             ClassLoader cl = sysContext.getClassLoader();
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
-            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
             
-            // 间谍日志
+            // 保留间谍日志，用来验证 LBSNavi 是否因为被骗而主动发了 16！
             XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -105,15 +103,15 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (obj == null) return;
                     String cls = obj.getClass().getSimpleName();
                     if ("MapStatusInfo".equals(cls)) {
-                        XposedBridge.log("NaviSpy: [Sys] MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
+                        XposedBridge.log("NaviSpy: [Sys] 系统主动发出 MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
                     } else if ("MapSwitchingInfo".equals(cls)) {
-                        XposedBridge.log("NaviSpy: [Sys] MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
+                        XposedBridge.log("NaviSpy: [Sys] 系统主动发出 MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
                     }
                 }
             });
 
             performManualBind();
-            startStatusHeartbeat();
+            startSpoofingHeartbeat();
         } catch (Throwable t) {}
     }
 
@@ -129,36 +127,45 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (conn == null) return;
                 Intent intent = new Intent().setComponent(new ComponentName(PKG_MAP, TARGET_SERVICE));
                 sysContext.bindService(intent, (ServiceConnection) conn, Context.BIND_AUTO_CREATE);
-                triggerActivationSequence();
             } catch (Throwable t) {}
         }, 2000);
     }
 
-    // 🔥 V270: 恢复成功骗取 Code 1 的最强魔法序列
-    private static void triggerActivationSequence() {
-        if (dashboardMgr == null) return;
-        XposedBridge.log("NaviHook: [Sys] 启动魔法清理与开屏序列...");
-        sysHandler.postDelayed(() -> sendMapStatus(1), 0);    // 清除旧路网视图
-        sysHandler.postDelayed(() -> sendMapStatus(3), 100);  // 清除旧交通视图
-        sysHandler.postDelayed(() -> sendMapSwitch(3), 200);  // 强制仪表盘切屏
-        sysHandler.postDelayed(() -> sendMapStatus(16), 300); // 宣布导航开始
-    }
+    // 🔥 V271 核心：不再强暴仪表盘，而是欺骗 LBSNavi 大脑
+    private static void startSpoofingHeartbeat() {
+        sysHandler.postDelayed(() -> {
+            if (statusHeartbeat != null) statusHeartbeat.cancel();
+            statusHeartbeat = new Timer();
+            statusHeartbeat.schedule(new TimerTask() { 
+                @Override 
+                public void run() { 
+                    try {
+                        // 1. 发送 10019 (STATE=40): 欺骗 LBSNavi 高德已经开始导航！
+                        Intent intentNavi = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
+                        intentNavi.putExtra("KEY_TYPE", 10019);
+                        intentNavi.putExtra("EXTRA_STATE", 40); 
+                        intentNavi.putExtra("EXTRA_STATUS_DETAILS", -1);
+                        sysContext.sendBroadcast(intentNavi);
 
-    // 🔥 发送广播，骗过高德 9.1 的 C++ 引擎 JSON 校验
-    private static void sendSyncBroadcasts(Context ctx) {
-        try {
-            Intent intent1 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
-            intent1.putExtra("KEY_TYPE", 10122);
-            intent1.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
-            intent1.putExtra("EXTRA_EXTERNAL_MAP_MODE", 3);
-            intent1.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); 
-            ctx.sendBroadcast(intent1);
-            
-            Intent intent2 = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
-            intent2.putExtra("KEY_TYPE", 13034);
-            intent2.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
-            ctx.sendBroadcast(intent2);
-        } catch (Throwable t) {}
+                        // 2. 发送 10122: 欺骗底层引擎调用大屏配置
+                        Intent intentEngine = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
+                        intentEngine.putExtra("KEY_TYPE", 10122);
+                        intentEngine.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
+                        intentEngine.putExtra("EXTRA_EXTERNAL_MAP_MODE", 3);
+                        intentEngine.putExtra("EXTRA_EXTERNAL_ENGINE_ID", 1001); 
+                        sysContext.sendBroadcast(intentEngine);
+                        
+                        // 3. 发送 13034: 欺骗看门狗实时缩放
+                        Intent intentSync = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
+                        intentSync.putExtra("KEY_TYPE", 13034);
+                        intentSync.putExtra("EXTRA_EXTERNAL_MAP_LEVEL", 17.0f);
+                        sysContext.sendBroadcast(intentSync);
+
+                        XposedBridge.log("NaviHook: [Sys] 正在发送 10019+10122 欺骗广播，诱导系统下发 Code 1...");
+                    } catch (Throwable t) {}
+                } 
+            }, 0, 2500);
+        }, 5000);
     }
 
     public static class TrojanProxyBinder extends Binder {
@@ -190,9 +197,9 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
 
-            // 🔥 V270 核心防御：拿到 Code 1 必须自己吃掉，绝不发给原生！
+            // 🔥 只要 LBSNavi 被骗成功，Code 1 必然会来到这里！
             if (code == 1) {
-                XposedBridge.log("NaviHook: [Proxy] 🎯 收到 Code 1 (AddSurface) - 独裁接管");
+                XposedBridge.log("NaviHook: [Proxy] 🎉 苍天有眼！终于收到 Code 1 (AddSurface)！");
                 data.setDataPosition(start); 
                 Surface s = null; 
                 int dId = -99;
@@ -203,21 +210,18 @@ public class MainHook implements IXposedHookLoadPackage {
                 if (s != null && s.isValid()) {
                     final int fdId = (dId <= 0) ? 1 : dId;
                     boolean inj = injectNativeEngine(s, fdId);
-                    XposedBridge.log("NaviHook: [Proxy] C++ 引擎注入 (ID=" + fdId + ") = " + inj);
+                    XposedBridge.log("NaviHook: [Proxy] C++ 引擎强制注入 (ID=" + fdId + ") = " + inj);
                     
-                    sysHandler.post(() -> sendSyncBroadcasts(sysContext));
                     uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
                 }
 
-                // 强制截断，绝不 return realBinder.transact()
+                // 吃掉 Code 1，绝不传给原生
                 if (reply != null && !reply.hasFileDescriptors()) reply.writeNoException();
                 return true; 
             }
             
-            // 🔥 V270 核心防御：截断 Code 2，只向仪表发送 17
             if (code == 2) {
-                XposedBridge.log("NaviHook: [Proxy] 🛑 收到 Code 2 (RemovedSurface) - 独裁接管");
-                sysHandler.post(() -> sendMapStatus(17)); // 发送 17 允许仪表盘正常退出投屏
+                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface)");
                 if (reply != null) reply.writeNoException();
                 return true; 
             }
@@ -306,30 +310,5 @@ public class MainHook implements IXposedHookLoadPackage {
                 isSpoofingAllowed = !is75; if (!is75) initAs91();
             }
         }, new IntentFilter(ACTION_VERSION_CHECK));
-    }
-
-    private static void sendMapStatus(int s) {
-        try {
-            Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
-            XposedHelpers.setIntField(st, "status", s); XposedHelpers.callMethod(dashboardMgr, "a", st);
-        } catch (Throwable t) {}
-    }
-
-    private static void sendMapSwitch(int s) {
-        try {
-            Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysContext.getClassLoader()), 5, 0);
-            XposedHelpers.setIntField(sw, "mSwitchState", s); XposedHelpers.callMethod(dashboardMgr, "a", sw);
-        } catch (Throwable t) {}
-    }
-
-    private static void startStatusHeartbeat() {
-        sysHandler.postDelayed(() -> {
-            if (statusHeartbeat != null) statusHeartbeat.cancel();
-            statusHeartbeat = new Timer();
-            statusHeartbeat.schedule(new TimerTask() { @Override public void run() { 
-                sendMapStatus(16); 
-                sendSyncBroadcasts(sysContext); 
-            } }, 0, 2000);
-        }, 5000);
     }
 }
