@@ -33,11 +33,17 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String PROVIDER_DESCRIPTOR = "com.autosimilarwidget.view.IAutoWidgetStateProvider";
     private static final String ACTION_VERSION_CHECK = "com.xsf.amaphelper.VERSION_CHECK";
     private static Context sysContext;
-    private static Handler sysHandler;
+    public static Handler sysHandler; // 设为 public 方便内部类调用
     private static Object dashboardMgr;
     private static Timer statusHeartbeat;
     private static boolean isSystemReady = false;
     private static boolean isSpoofingAllowed = false;
+
+    // 🔥 V274 核心：防抖关闭任务
+    public static Runnable closeDashboardTask = () -> {
+        sendMapStatus(17); // 17: GUIDE_STOP 退出导航
+        XposedBridge.log("NaviHook: [Sys] 真正执行关幕布 (MapStatusInfo 17)");
+    };
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -96,6 +102,7 @@ public class MainHook implements IXposedHookLoadPackage {
             Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", cl);
             dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
 
+            // 间谍日志
             XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -104,9 +111,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (obj == null) return;
                     String cls = obj.getClass().getSimpleName();
                     if ("MapStatusInfo".equals(cls)) {
-                        XposedBridge.log("NaviSpy: [Sys] MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
+                        XposedBridge.log("NaviSpy: [Sys] 最终发出 MapStatusInfo -> " + XposedHelpers.getIntField(obj, "status"));
                     } else if ("MapSwitchingInfo".equals(cls)) {
-                        XposedBridge.log("NaviSpy: [Sys] MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
+                        XposedBridge.log("NaviSpy: [Sys] 最终发出 MapSwitchingInfo -> " + XposedHelpers.getIntField(obj, "mSwitchState"));
                     }
                 }
             });
@@ -132,7 +139,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 2000);
     }
 
-    // 欺骗 LBSNavi，引诱它下发 Code 1 屏幕
+    // 继续欺骗 LBSNavi，稳定骗取 Code 1
     private static void startSpoofingHeartbeat() {
         sysHandler.postDelayed(() -> {
             if (statusHeartbeat != null) statusHeartbeat.cancel();
@@ -164,7 +171,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }, 5000);
     }
 
-    private static void sendMapStatus(int s) {
+    public static void sendMapStatus(int s) {
         if (dashboardMgr == null) return;
         try {
             Object st = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysContext.getClassLoader()), 0);
@@ -173,7 +180,7 @@ public class MainHook implements IXposedHookLoadPackage {
         } catch (Throwable t) {}
     }
 
-    private static void sendMapSwitch(int s) {
+    public static void sendMapSwitch(int s) {
         if (dashboardMgr == null) return;
         try {
             Object sw = XposedHelpers.newInstance(XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysContext.getClassLoader()), 5, 0);
@@ -211,16 +218,21 @@ public class MainHook implements IXposedHookLoadPackage {
             }
             if (code == 3) { if (reply != null) { reply.writeNoException(); reply.writeInt(1); } return true; }
 
-            // 🔥 核心修正：绝对不发 17 干扰！安安静静把 Code 2 吃掉
+            // 🔥 Code 2 防抖拦截
             if (code == 2) {
-                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface) -> 拦截吃掉，不干扰仪表盘");
+                XposedBridge.log("NaviHook: [Proxy] 收到 Code 2 (RemovedSurface) -> 开启 1 秒防抖等待...");
+                sysHandler.removeCallbacks(closeDashboardTask);
+                // 延迟 1 秒执行关闭，如果这 1 秒内等到了 Code 1，这个任务就会被取消！
+                sysHandler.postDelayed(closeDashboardTask, 1000); 
                 if (reply != null) reply.writeNoException();
                 return true; 
             }
 
-            // 🔥 Code 1: 拿到画板，直接画图并拉开幕布！
+            // 🔥 Code 1 延迟拉幕布
             if (code == 1) {
-                XposedBridge.log("NaviHook: [Proxy] 🎉 苍天有眼！收到 Code 1 (AddSurface)！");
+                XposedBridge.log("NaviHook: [Proxy] 🎉 收到 Code 1 (AddSurface)！立即取消关幕布计划！");
+                sysHandler.removeCallbacks(closeDashboardTask); // 取消 Code 2 的误杀
+
                 data.setDataPosition(start); 
                 Surface s = null; 
                 int dId = -99;
@@ -233,13 +245,14 @@ public class MainHook implements IXposedHookLoadPackage {
                     boolean inj = injectNativeEngine(s, fdId);
                     XposedBridge.log("NaviHook: [Proxy] C++ 引擎强制注入 (ID=" + fdId + ") = " + inj);
                     
-                    // 🚀 核心动作：强制仪表盘拉开转速表，露出地图！
-                    sysHandler.post(() -> {
-                        sendMapSwitch(3);  // 强切导航 UI
-                        sendMapStatus(16); // 确认状态
-                    });
+                    // 🚀 核心动作：等待 1.5 秒，避开系统的内部重置风暴，然后再强行拉开幕布！
+                    sysHandler.postDelayed(() -> {
+                        XposedBridge.log("NaviHook: [Sys] 延迟结束，向仪表盘发送强切屏指令！");
+                        sendMapSwitch(3);  // 3: CRUISE_SWITCH_TO_GUIDE 
+                        sendMapStatus(16); // 16: GUIDE_START [cite: 5, 12]
+                    }, 1500);
 
-                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 500);
+                    uiHandler.postDelayed(this::notifySystemFrameDrawn, 600);
                 }
 
                 if (reply != null && !reply.hasFileDescriptors()) reply.writeNoException();
