@@ -30,11 +30,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static Context sysContext;
     private static Handler sysHandler;
-    private static ClassLoader sysClassLoader;
-    private static Object dashboardMgr;
-    
     private static boolean isNaviRunning = false;
-    private static boolean isInjecting = false;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
@@ -44,12 +40,13 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         // ==========================================
-        // 核心战场 A：LBSNavi 端 (虚拟吉利特权控制器)
+        // 战场 A：LBSNavi 端 (物理硬件控制器)
         // ==========================================
         if (lpparam.packageName.equals(PKG_SERVICE)) {
+            XposedBridge.log("NaviHook: [Sys] V295 物理硬件控制版注入 LBSNavi");
             hookPackageManager(lpparam.classLoader);
-
-            // 动态保活机制，防止启动即投屏
+            
+            // 动态保活，防止开局就霸占屏幕
             try {
                 Class<?> cfg = XposedHelpers.findClassIfExists("ecarx.naviservice.map.co", lpparam.classLoader);
                 if (cfg != null) {
@@ -66,24 +63,25 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
                     sysContext = (Context) param.thisObject;
-                    sysClassLoader = sysContext.getClassLoader();
                     sysHandler = new Handler(Looper.getMainLooper());
-                    sysHandler.postDelayed(() -> initVirtualJiliManager(), 4000);
+                    sysHandler.postDelayed(() -> initHardwareRadar(), 4000);
                 }
             });
         }
 
         // ==========================================
-        // 核心战场 B：高德地图端 (接管画板 + 护航回调)
+        // 战场 B：高德端 (首帧护航与画板接管)
         // ==========================================
         if (lpparam.packageName.equals(PKG_MAP)) {
+            XposedBridge.log("NaviHook: [Amap] V295 注入高德");
             hookPackageManager(lpparam.classLoader);
             hookSurfaceDimensions(lpparam.classLoader);
-
+            
             try {
                 XposedHelpers.findAndHookMethod(TARGET_SERVICE, lpparam.classLoader, "onBind", Intent.class, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("NaviHook: [Amap] 成功接管 WidgetService onBind");
                         param.setResult(new TrojanProxyBinder((IBinder) param.getResult(), (Context) param.thisObject));
                     }
                 });
@@ -91,24 +89,8 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    private static void initVirtualJiliManager() {
+    private static void initHardwareRadar() {
         try {
-            Class<?> mgrClass = XposedHelpers.findClass("ecarx.naviservice.a.a", sysClassLoader);
-            dashboardMgr = XposedHelpers.getStaticObjectField(mgrClass, "b");
-
-            // 没收原生干瘪的 16 和 17，由我们全盘接管状态
-            XposedBridge.hookAllMethods(mgrClass, "a", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    if (isInjecting || param.args == null || param.args.length == 0 || param.args[0] == null) return;
-                    if ("MapStatusInfo".equals(param.args[0].getClass().getSimpleName())) {
-                        int status = XposedHelpers.getIntField(param.args[0], "status");
-                        if (status == 16 || status == 17) param.setResult(null);
-                    }
-                }
-            });
-
-            // 雷达窃听 9.1 的真实动向
             IntentFilter filter = new IntentFilter("AUTONAVI_STANDARD_BROADCAST_SEND");
             sysContext.registerReceiver(new BroadcastReceiver() {
                 @Override
@@ -125,32 +107,52 @@ public class MainHook implements IXposedHookLoadPackage {
                         else if (mode == 0) shouldStop = true;
                     } else if (keyType == 10019) {
                         int state = intent.getIntExtra("EXTRA_STATE", -1);
-                        if (state == 16) shouldStart = true;
+                        // 无视原厂映射 Bug，听到 16、200、8 都算开始导航！
+                        if (state == 16 || state == 200 || state == 8) shouldStart = true;
                         else if (state == 17 || state == 9 || state == 12) shouldStop = true;
                     } else if (keyType == 10001) {
                         shouldStart = true;
                     }
 
                     if (shouldStart && !isNaviRunning) {
-                        XposedBridge.log("NaviHook: [Sys] 🚨 雷达侦测到高德 9.1 开始导航! 启动 V254 完美阶梯连招...");
                         isNaviRunning = true;
-                        triggerSafeActivationSequence();
+                        XposedBridge.log("NaviHook: [Sys] 🚨 侦测到导航！正在呼叫硬件控制器拉开屏幕！");
+                        triggerHardwareScreen(1); // 1 = 导航模式(拉开)
                     } else if (shouldStop && isNaviRunning) {
-                        XposedBridge.log("NaviHook: [Sys] 🚨 侦测到退出导航, 平稳关屏...");
                         isNaviRunning = false;
-                        closeDashboard();
+                        XposedBridge.log("NaviHook: [Sys] 🚨 退出导航，呼叫硬件控制器关闭屏幕！");
+                        triggerHardwareScreen(0); // 0 = 巡航模式(关闭)
                     }
                 }
             }, filter);
 
             forceBindWidgetService();
-            XposedBridge.log("NaviHook: [Sys] 虚拟特权后门就绪, 等待雷达唤醒!");
+            XposedBridge.log("NaviHook: [Sys] 硬件雷达就绪！绕过原厂一切 Bug！");
         } catch (Throwable t) {}
+    }
+
+    // 🔥 核心突界：直接调用 LBSNavi 隐藏的硬件控制器
+    private static void triggerHardwareScreen(int mode) {
+        try {
+            // 获取 ecarx.naviservice.widget.g 这个终极硬件包装类
+            Class<?> gClass = XposedHelpers.findClass("ecarx.naviservice.widget.g", sysContext.getClassLoader());
+            
+            // 获取单例 g.a(ApplicationContext)
+            Object gInstance = XposedHelpers.callStaticMethod(gClass, "a", sysContext);
+            
+            if (gInstance != null) {
+                // 直接调用 gInstance.a(1) 或 gInstance.a(0) 物理翻转屏幕！
+                XposedHelpers.callMethod(gInstance, "a", mode);
+                XposedBridge.log("NaviHook: [Sys] 💥 硬件接口已成功调用！开屏模式 = " + mode);
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("NaviHook: [Sys] 调用硬件控制器失败: " + t);
+        }
     }
 
     private static void forceBindWidgetService() {
         try {
-            Class<?> hClass = XposedHelpers.findClass("ecarx.naviservice.map.amap.h", sysClassLoader);
+            Class<?> hClass = XposedHelpers.findClass("ecarx.naviservice.map.amap.h", sysContext.getClassLoader());
             Object inst = XposedHelpers.getStaticObjectField(hClass, "e");
             if (inst != null) {
                 Object conn = XposedHelpers.getObjectField(inst, "f");
@@ -162,84 +164,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 sysHandler.postDelayed(MainHook::forceBindWidgetService, 2000);
             }
         } catch (Throwable t) {}
-    }
-
-    // 🔥 满血复活：严格还原 V254 的阶梯状态机连招！
-    private static void triggerSafeActivationSequence() {
-        isInjecting = true;
-        try {
-            Class<?> statusCls = XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysClassLoader);
-            Class<?> switchCls = XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysClassLoader);
-
-            // 1. 瞬间下发: 状态 1 (清理后台残留)
-            sysHandler.post(() -> {
-                try {
-                    XposedBridge.log("NaviHook: [Sys] 连招1: 发送 MapStatusInfo(1)");
-                    Object st1 = XposedHelpers.newInstance(statusCls, 1);
-                    XposedHelpers.callMethod(dashboardMgr, "a", st1);
-                } catch (Throwable t) {}
-            });
-
-            // 2. 延时 100ms 下发: 状态 3 (激活车机前台引擎)
-            sysHandler.postDelayed(() -> {
-                try {
-                    XposedBridge.log("NaviHook: [Sys] 连招2: 发送 MapStatusInfo(3)");
-                    Object st3 = XposedHelpers.newInstance(statusCls, 3);
-                    XposedHelpers.callMethod(dashboardMgr, "a", st3);
-                } catch (Throwable t) {}
-            }, 100);
-
-            // 3. 延时 200ms 下发: Switch 3 (下达拉开物理屏幕的指令)
-            sysHandler.postDelayed(() -> {
-                try {
-                    XposedBridge.log("NaviHook: [Sys] 连招3: 发送 Switch(3) (拉开物理幕布)");
-                    Object sw = XposedHelpers.newInstance(switchCls, 5, 0); // Ecarx切换至Amap
-                    XposedHelpers.setIntField(sw, "mSwitchState", 3);
-                    XposedHelpers.callMethod(dashboardMgr, "a", sw);
-                } catch (Throwable t) {}
-            }, 200);
-
-            // 4. 延时 1700ms: 等待 1.5 秒仪表盘动画结束，拿取画板！防闪退核心！
-            sysHandler.postDelayed(() -> {
-                if (!isNaviRunning) return; 
-                isInjecting = true;
-                try {
-                    XposedBridge.log("NaviHook: [Sys] 连招4: 发送 MapStatusInfo(16) (索要 Code 1 画板)");
-                    Object st16 = XposedHelpers.newInstance(statusCls, 16);
-                    XposedHelpers.callMethod(dashboardMgr, "a", st16);
-                } catch (Throwable t) {}
-                isInjecting = false;
-            }, 1700);
-
-        } catch (Throwable t) {
-            isInjecting = false;
-        }
-    }
-
-    private static void closeDashboard() {
-        isInjecting = true;
-        try {
-            Class<?> statusCls = XposedHelpers.findClass("ecarx.naviservice.map.entity.MapStatusInfo", sysClassLoader);
-            Class<?> switchCls = XposedHelpers.findClass("ecarx.naviservice.map.entity.MapSwitchingInfo", sysClassLoader);
-
-            sysHandler.post(() -> {
-                try {
-                    Object st17 = XposedHelpers.newInstance(statusCls, 17);
-                    XposedHelpers.callMethod(dashboardMgr, "a", st17);
-                } catch (Throwable t) {}
-            });
-
-            sysHandler.postDelayed(() -> {
-                try {
-                    Object sw2 = XposedHelpers.newInstance(switchCls, 0, 5); // Amap切回Ecarx
-                    XposedHelpers.setIntField(sw2, "mSwitchState", 2); 
-                    XposedHelpers.callMethod(dashboardMgr, "a", sw2);
-                } catch (Throwable t) {}
-                isInjecting = false;
-            }, 100);
-        } catch (Throwable t) {
-            isInjecting = false;
-        }
     }
 
     private static void hookPackageManager(ClassLoader cl) {
@@ -316,7 +240,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 boolean realRes = false;
                 try { if (realBinder != null) realRes = realBinder.transact(code, data, reply, flags); } catch (Throwable t) {}
 
-                // Binder 首帧护航
+                // 看门狗护航 1：Binder 回调
                 if (sSystemProvider != null && sSystemProvider.isBinderAlive()) {
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                         Parcel d = Parcel.obtain(); Parcel r = Parcel.obtain();
@@ -328,18 +252,18 @@ public class MainHook implements IXposedHookLoadPackage {
                     }, 500);
                 }
 
-                // 虚拟 7.5 特供首帧广播
+                // 看门狗护航 2：发送 116 首帧广播
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     try {
                         Intent intent = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
                         intent.putExtra("KEY_TYPE", 10019);
                         intent.putExtra("EXTRA_CURRENT_STATE", 116);
                         amapContext.sendBroadcast(intent);
-                        XposedBridge.log("NaviHook: [Proxy] 🚨 10019(116) 虚拟首帧广播已补发! 堵死看门狗!");
+                        XposedBridge.log("NaviHook: [Proxy] 🚨 10019(116) 虚拟首帧广播已发!");
                     } catch (Throwable t) {}
                 }, 600);
 
-                // 解锁引擎
+                // 解锁引擎防黑屏
                 if (!isUnlockingEngine) {
                     isUnlockingEngine = true;
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
