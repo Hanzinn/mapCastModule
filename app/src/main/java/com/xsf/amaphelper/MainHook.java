@@ -30,6 +30,8 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static Context sysContext;
     private static Handler sysHandler;
+    private static ClassLoader sysClassLoader;
+    
     private static boolean isNaviRunning = false;
 
     @Override
@@ -40,13 +42,13 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         // ==========================================
-        // 战场 A：LBSNavi 端 (物理硬件控制器)
+        // 战场 A：LBSNavi 端 (EventBus 内部总线注入)
         // ==========================================
         if (lpparam.packageName.equals(PKG_SERVICE)) {
-            XposedBridge.log("NaviHook: [Sys] V295 物理硬件控制版注入 LBSNavi");
+            XposedBridge.log("NaviHook: [Sys] V296 EventBus 总线注入版已就绪");
             hookPackageManager(lpparam.classLoader);
             
-            // 动态保活，防止开局就霸占屏幕
+            // 动态保活
             try {
                 Class<?> cfg = XposedHelpers.findClassIfExists("ecarx.naviservice.map.co", lpparam.classLoader);
                 if (cfg != null) {
@@ -63,8 +65,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
                     sysContext = (Context) param.thisObject;
+                    sysClassLoader = sysContext.getClassLoader();
                     sysHandler = new Handler(Looper.getMainLooper());
-                    sysHandler.postDelayed(() -> initHardwareRadar(), 4000);
+                    sysHandler.postDelayed(() -> initEventBusRadar(), 4000);
                 }
             });
         }
@@ -73,7 +76,7 @@ public class MainHook implements IXposedHookLoadPackage {
         // 战场 B：高德端 (首帧护航与画板接管)
         // ==========================================
         if (lpparam.packageName.equals(PKG_MAP)) {
-            XposedBridge.log("NaviHook: [Amap] V295 注入高德");
+            XposedBridge.log("NaviHook: [Amap] V296 注入高德");
             hookPackageManager(lpparam.classLoader);
             hookSurfaceDimensions(lpparam.classLoader);
             
@@ -89,7 +92,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    private static void initHardwareRadar() {
+    private static void initEventBusRadar() {
         try {
             IntentFilter filter = new IntentFilter("AUTONAVI_STANDARD_BROADCAST_SEND");
             sysContext.registerReceiver(new BroadcastReceiver() {
@@ -107,7 +110,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         else if (mode == 0) shouldStop = true;
                     } else if (keyType == 10019) {
                         int state = intent.getIntExtra("EXTRA_STATE", -1);
-                        // 无视原厂映射 Bug，听到 16、200、8 都算开始导航！
+                        // 无视原厂 Bug，16、200、8 都算开始！
                         if (state == 16 || state == 200 || state == 8) shouldStart = true;
                         else if (state == 17 || state == 9 || state == 12) shouldStop = true;
                     } else if (keyType == 10001) {
@@ -116,43 +119,56 @@ public class MainHook implements IXposedHookLoadPackage {
 
                     if (shouldStart && !isNaviRunning) {
                         isNaviRunning = true;
-                        XposedBridge.log("NaviHook: [Sys] 🚨 侦测到导航！正在呼叫硬件控制器拉开屏幕！");
-                        triggerHardwareScreen(1); // 1 = 导航模式(拉开)
+                        XposedBridge.log("NaviHook: [Sys] 🚨 侦测到导航！向内部总线发射 116 物理开屏事件...");
+                        triggerEventBus(116); 
                     } else if (shouldStop && isNaviRunning) {
                         isNaviRunning = false;
-                        XposedBridge.log("NaviHook: [Sys] 🚨 退出导航，呼叫硬件控制器关闭屏幕！");
-                        triggerHardwareScreen(0); // 0 = 巡航模式(关闭)
+                        XposedBridge.log("NaviHook: [Sys] 🚨 退出导航，向内部总线发射 117 关屏事件...");
+                        triggerEventBus(117); 
                     }
                 }
             }, filter);
 
             forceBindWidgetService();
-            XposedBridge.log("NaviHook: [Sys] 硬件雷达就绪！绕过原厂一切 Bug！");
+            XposedBridge.log("NaviHook: [Sys] EventBus 雷达就绪！");
         } catch (Throwable t) {}
     }
 
-    // 🔥 核心突界：直接调用 LBSNavi 隐藏的硬件控制器
-    private static void triggerHardwareScreen(int mode) {
+    // 🔥 核心突破：直接调用 LBSNavi 内部 EventBus 发射事件
+    private static void triggerEventBus(int eventCode) {
         try {
-            // 获取 ecarx.naviservice.widget.g 这个终极硬件包装类
-            Class<?> gClass = XposedHelpers.findClass("ecarx.naviservice.widget.g", sysContext.getClassLoader());
+            // 获取 RxJava EventBus 单例：e.a()
+            Class<?> eClass = XposedHelpers.findClass("ecarx.naviservice.d.e", sysClassLoader);
+            Object eInstance = XposedHelpers.callStaticMethod(eClass, "a");
+
+            // 创建 bz 事件对象
+            Class<?> bzClass = XposedHelpers.findClass("ecarx.naviservice.map.bz", sysClassLoader);
+            Object bzEvent = null;
             
-            // 获取单例 g.a(ApplicationContext)
-            Object gInstance = XposedHelpers.callStaticMethod(gClass, "a", sysContext);
-            
-            if (gInstance != null) {
-                // 直接调用 gInstance.a(1) 或 gInstance.a(0) 物理翻转屏幕！
-                XposedHelpers.callMethod(gInstance, "a", mode);
-                XposedBridge.log("NaviHook: [Sys] 💥 硬件接口已成功调用！开屏模式 = " + mode);
+            // 兼容 bz 类的不同构造函数 (带参或不带参)
+            try {
+                bzEvent = XposedHelpers.newInstance(bzClass, eventCode);
+            } catch (Throwable t1) {
+                try {
+                    bzEvent = XposedHelpers.newInstance(bzClass, eventCode, null);
+                } catch (Throwable t2) {
+                    bzEvent = XposedHelpers.newInstance(bzClass, eventCode, "");
+                }
+            }
+
+            // 发射事件：e.a().a(new bz(eventCode))
+            if (eInstance != null && bzEvent != null) {
+                XposedHelpers.callMethod(eInstance, "a", bzEvent);
+                XposedBridge.log("NaviHook: [Sys] 💥 内部总线事件 [" + eventCode + "] 发射成功！");
             }
         } catch (Throwable t) {
-            XposedBridge.log("NaviHook: [Sys] 调用硬件控制器失败: " + t);
+            XposedBridge.log("NaviHook: [Sys] 内部总线事件发射失败: " + t);
         }
     }
 
     private static void forceBindWidgetService() {
         try {
-            Class<?> hClass = XposedHelpers.findClass("ecarx.naviservice.map.amap.h", sysContext.getClassLoader());
+            Class<?> hClass = XposedHelpers.findClass("ecarx.naviservice.map.amap.h", sysClassLoader);
             Object inst = XposedHelpers.getStaticObjectField(hClass, "e");
             if (inst != null) {
                 Object conn = XposedHelpers.getObjectField(inst, "f");
@@ -252,7 +268,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     }, 500);
                 }
 
-                // 看门狗护航 2：发送 116 首帧广播
+                // 看门狗护航 2：模拟 7.5 特供首帧广播
                 new Handler(Looper.getMainLooper()).postDelayed(() -> {
                     try {
                         Intent intent = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
