@@ -1,8 +1,8 @@
 package com.xsf.amaphelper;
 
-import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
+import android.os.Bundle;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -14,7 +14,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static final String PKG_MAP = "com.autonavi.amapauto";
     private static final String PKG_SERVICE = "ecarx.naviservice";
-    private static final String TAG = "【NaviFixer】";
+    private static final String TAG = "【NaviFixer V3】";
 
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
@@ -25,61 +25,86 @@ public class MainHook implements IXposedHookLoadPackage {
             return;
         }
 
-        // =====================================================================
-        // ⚔️ 阵列 A：高德地图端 (执行欺骗与强制覆写手术)
-        // =====================================================================
-        if (currentPkg.equals(PKG_MAP)) {
-            XposedBridge.log(TAG + "成功注入高德地图，开始执行三重破解手术...");
+        XposedBridge.log(TAG + "成功潜入: " + currentPkg + "，开始执行终极破解...");
 
-            // 1. 属性伪装
-            try {
-                Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", lpparam.classLoader);
-                XC_MethodHook propHook = new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        String key = (String) param.args[0];
-                        String value = (String) param.getResult();
-                        if (value != null) {
-                            if (value.contains("IHU516G") || value.contains("IHU509G") || value.contains("SX11")) {
-                                String fakeValue = "IHU519G";
-                                if (value.contains("SX11")) fakeValue = "FS11A1";
-                                param.setResult(fakeValue);
-                                XposedBridge.log(TAG + "🎭 [属性伪装-高德] 拦截读取 " + key + " -> 伪装为: " + fakeValue);
-                            }
+        // =====================================================================
+        // 核心突破 1：全域属性伪装 (高德和 LBSNavi 必须统一口径！)
+        // =====================================================================
+        try {
+            Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", lpparam.classLoader);
+            XC_MethodHook propHook = new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    String key = (String) param.args[0];
+                    String value = (String) param.getResult();
+                    if (value != null) {
+                        // 统一把低配缤瑞伪装成高配星瑞！
+                        if (value.contains("IHU516G") || value.contains("IHU509G") || value.contains("SX11")) {
+                            String fakeValue = "IHU519G";
+                            if (value.contains("SX11")) fakeValue = "FS11A1";
+                            param.setResult(fakeValue);
+                            XposedBridge.log(TAG + "🎭 [" + currentPkg + "] 强行伪装属性 " + key + " -> 假冒为: " + fakeValue);
+                        }
+                        // 如果系统查 easdemon_support，强行返回 1
+                        if (key != null && key.contains("easdemon_support")) {
+                            param.setResult("1");
+                            XposedBridge.log(TAG + "🎭 [" + currentPkg + "] 强行伪装 easdemon_support -> 1 (开启底层服务)");
                         }
                     }
-                };
-                XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, propHook);
-                XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, String.class, propHook);
-            } catch (Throwable t) {}
+                }
+            };
+            XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, propHook);
+            XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, String.class, propHook);
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + "属性伪装失败: " + t.getMessage());
+        }
 
-            // 2. 广播强改
+        // =====================================================================
+        // 核心突破 2：高德广播强改与“强制踹门”
+        // =====================================================================
+        if (currentPkg.equals(PKG_MAP)) {
             try {
                 XposedHelpers.findAndHookMethod(ContextWrapper.class, "sendBroadcast", Intent.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        ContextWrapper context = (ContextWrapper) param.thisObject;
                         Intent intent = (Intent) param.args[0];
+                        
                         if (intent != null && intent.getExtras() != null) {
                             int keyType = intent.getIntExtra("KEY_TYPE", -1);
                             
+                            // 拦截 10117 屏幕控制
                             if (keyType == 10117) {
                                 int status = intent.getIntExtra("EXTSCREEN_STATUS_INFO", -1);
-                                XposedBridge.log(TAG + "📡 [高德-发信] 准备发送 10117 指令，当前状态: " + status);
                                 if (status == 2) {
                                     intent.putExtra("EXTSCREEN_STATUS_INFO", 0);
-                                    XposedBridge.log(TAG + "🚨 [高德-篡改] 警告！强行将状态 2 (关屏) 改写为 0 (开屏)！");
+                                    XposedBridge.log(TAG + "🚨 [高德-篡改] 强行将 10117 状态 2 改为 0 (请求开屏)！");
                                 }
+                                
+                                // 【终极杀招】：只要发出 10117 (0)，我们立刻手动伪造 116 首帧信号！代替高德踹门！
+                                XposedBridge.log(TAG + "💥 [高德-踹门] 正在代发 10019 (116) 首帧就绪信号...");
+                                Intent fakeIntent = new Intent("AUTONAVI_STANDARD_BROADCAST_SEND");
+                                fakeIntent.putExtra("KEY_TYPE", 10019);
+                                fakeIntent.putExtra("EXTRA_CURRENT_STATE", 116);
+                                context.sendBroadcast(fakeIntent); // 手动发射！
+                                XposedBridge.log(TAG + "💥 [高德-踹门] 116 破门信号已发射！大门必须开！");
                             }
+                            
+                            // 监控 10019
                             if (keyType == 10019) {
                                 int state = intent.getIntExtra("EXTRA_CURRENT_STATE", -1);
-                                XposedBridge.log(TAG + "📡 [高德-发信] 发送 10019 状态同步 -> EXTRA_CURRENT_STATE: " + state);
+                                if (state == 116) {
+                                    XposedBridge.log(TAG + "✅ [合法通行] 捕获到真实的 116 信号！");
+                                }
                             }
                         }
                     }
                 });
-            } catch (Throwable t) {}
+            } catch (Throwable t) {
+                XposedBridge.log(TAG + "广播拦截失败: " + t.getMessage());
+            }
 
-            // 3. C++ JNI 回传监控与修改
+            // 拦截 JNI 底层状态回传
             try {
                 Class<?> protocolClass = XposedHelpers.findClassIfExists("com.autonavi.amapauto.jni.protocol.AndroidProtocolExe", lpparam.classLoader);
                 if (protocolClass != null) {
@@ -88,67 +113,12 @@ public class MainHook implements IXposedHookLoadPackage {
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                             int status = (int) param.args[0];
                             if (status == 2) {
-                                XposedBridge.log(TAG + "⚙️ [JNI-篡改] 拦截向 C++ 引擎回传状态 2，强行修改为 0！");
                                 param.args[0] = 0;
+                                XposedBridge.log(TAG + "⚙️ [JNI-篡改] 强行修改 C++ 底层回传状态为 0！");
                             }
                         }
                     });
                 }
-            } catch (Throwable t) {}
-        }
-
-        // =====================================================================
-        // 🎧 阵列 B：车机系统 LBSNavi 端 (纯监听，不干预)
-        // =====================================================================
-        if (currentPkg.equals(PKG_SERVICE)) {
-            XposedBridge.log(TAG + "成功潜入 LBSNavi 系统服务，系统侧回音雷达已开启！");
-
-            // 1. 监听 LBSNavi 是否收到了我们的广播
-            try {
-                Class<?> broadcastReceiverClass = XposedHelpers.findClass("android.content.BroadcastReceiver", lpparam.classLoader);
-                XposedHelpers.findAndHookMethod(broadcastReceiverClass, "onReceive", Context.class, Intent.class, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        Intent intent = (Intent) param.args[1];
-                        if (intent != null && intent.getAction() != null) {
-                            String action = intent.getAction();
-                            // 只抓取高德相关的广播
-                            if (action.contains("AUTONAVI") || action.contains("ecarx") || action.contains("navi")) {
-                                int keyType = intent.getIntExtra("KEY_TYPE", -1);
-                                if (keyType == 10117 || keyType == 10019) {
-                                    XposedBridge.log(TAG + "📥 [LBS-收信] 系统成功接收广播！KeyType: " + keyType);
-                                    if (keyType == 10117) {
-                                        int status = intent.getIntExtra("EXTSCREEN_STATUS_INFO", -1);
-                                        XposedBridge.log(TAG + "📥 [LBS-收信] -> 提取到的屏幕控制状态: " + status);
-                                    }
-                                    if (keyType == 10019) {
-                                        int state = intent.getIntExtra("EXTRA_CURRENT_STATE", -1);
-                                        XposedBridge.log(TAG + "📥 [LBS-收信] -> 提取到的引擎状态(如116): " + state);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            } catch (Throwable t) {
-                XposedBridge.log(TAG + "LBSNavi 广播监听部署失败: " + t.getMessage());
-            }
-
-            // 2. 监听 LBSNavi 内部是否在读取底层属性 (防止二次拦截)
-            try {
-                Class<?> sysPropClass = XposedHelpers.findClass("android.os.SystemProperties", lpparam.classLoader);
-                XC_MethodHook propHookLbs = new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        String key = (String) param.args[0];
-                        String value = (String) param.getResult();
-                        if (key != null && (key.contains("easdemon") || key.contains("product"))) {
-                            XposedBridge.log(TAG + "🔍 [LBS-查岗] 系统内部读取属性 -> Key: " + key + " | Value: " + value);
-                        }
-                    }
-                };
-                XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, propHookLbs);
-                XposedHelpers.findAndHookMethod(sysPropClass, "get", String.class, String.class, propHookLbs);
             } catch (Throwable t) {}
         }
     }
